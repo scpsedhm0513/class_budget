@@ -50,7 +50,7 @@
                             if (docSnap.exists() && docSnap.data()?.classes) {
                                 window.classData = docSnap.data().classes;
                                 localStorage.setItem('class_budget_data_v1', JSON.stringify(window.classData));
-                                window.render();
+                                if (typeof window.render === 'function') window.render();
                                 window.setSyncBadgeStatus(true, docSnap.data()?.updatedAt);
                             } else {
                                 window.saveToCloud(window.classData);
@@ -70,7 +70,6 @@
                 window.setSyncBadgeStatus(false);
             }
         } else {
-            // 파이어베이스 설정이 없는 단독 로컬 실행 시
             setTimeout(() => window.setSyncBadgeStatus(false), 500);
         }
 
@@ -421,7 +420,7 @@
         </div>
     </main>
 
-    <!-- Custom Modal UI for Confirmations -->
+    <!-- Cloud Config Modal -->
     <div id="cloud-config-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
         <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 border border-slate-100">
             <div class="flex justify-between items-center border-b border-slate-100 pb-3">
@@ -472,7 +471,7 @@
         </div>
     </div>
 
-    <!-- Teacher Share Info Modal -->
+    <!-- Share Guide Modal -->
     <div id="share-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
         <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-100">
             <div class="flex justify-between items-center border-b border-slate-100 pb-3">
@@ -538,7 +537,72 @@
         </div>
     </div>
 
+    <!-- Generic Confirm Modal -->
+    <div id="confirm-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 border border-slate-100">
+            <div class="text-center">
+                <div class="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <h3 class="font-bold text-slate-800 text-base" id="confirm-modal-title">확인 요청</h3>
+                <p class="text-xs text-slate-600 mt-2" id="confirm-modal-msg">정말 진행하시겠습니까?</p>
+            </div>
+            <div class="flex gap-2 pt-2">
+                <button id="confirm-btn-cancel" class="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2 rounded-xl text-xs transition">
+                    취소
+                </button>
+                <button id="confirm-btn-ok" class="w-1/2 bg-red-600 hover:bg-red-700 text-white font-semibold py-2 rounded-xl text-xs transition">
+                    확인
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        const TOTAL_CLASSES = 10;
+        const DEFAULT_CLASS_BUDGET = 300000;
+        const SPORTS_DRINK_COST = 59400;
+        let currentSelectedClass = 1;
+
+        function setSyncBadgeStatus(isSynced, timeStr) {
+            const badge = document.getElementById('sync-status-badge');
+            const timeDesc = document.getElementById('sync-time-desc');
+            if (!badge || !timeDesc) return;
+
+            if (isSynced) {
+                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 저장됨`;
+                const dateObj = timeStr ? new Date(timeStr) : new Date();
+                timeDesc.textContent = `기본 예산 3,000,000원 (반별 300,000원) | 동기화: ${dateObj.toLocaleTimeString('ko-KR')}`;
+            } else {
+                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> 로컬 저장 모드`;
+                timeDesc.textContent = `기본 예산 3,000,000원 | 브라우저 로컬 저장소에 자동 보관 중`;
+            }
+        }
+
+        function showSavingIndicator(isSaving) {
+            const spinIcon = document.getElementById('sync-spin-icon');
+            if (!spinIcon) return;
+            if (isSaving) {
+                spinIcon.classList.add('fa-spin');
+            } else {
+                spinIcon.classList.remove('fa-spin');
+            }
+        }
+
+        function forceSyncData() {
+            showSavingIndicator(true);
+            setTimeout(() => {
+                saveData();
+                showSavingIndicator(false);
+            }, 300);
+        }
+
+        function showBackupModal() {
+            document.getElementById('backup-modal').classList.remove('hidden');
+        }
+
         function showShareGuideModal() {
             document.getElementById('share-modal').classList.remove('hidden');
         }
@@ -549,6 +613,29 @@
                 document.getElementById('firebase-config-input').value = saved;
             }
             document.getElementById('cloud-config-modal').classList.remove('hidden');
+        }
+
+        function showConfirmModal(title, message, onConfirm) {
+            const modal = document.getElementById('confirm-modal');
+            document.getElementById('confirm-modal-title').textContent = title;
+            document.getElementById('confirm-modal-msg').textContent = message;
+
+            const cancelBtn = document.getElementById('confirm-btn-cancel');
+            const okBtn = document.getElementById('confirm-btn-ok');
+
+            const cleanup = () => {
+                modal.classList.add('hidden');
+                cancelBtn.onclick = null;
+                okBtn.onclick = null;
+            };
+
+            cancelBtn.onclick = cleanup;
+            okBtn.onclick = () => {
+                cleanup();
+                if (typeof onConfirm === 'function') onConfirm();
+            };
+
+            modal.classList.remove('hidden');
         }
 
         function saveCustomFirebaseConfig() {
@@ -600,6 +687,7 @@
         }
 
         let classData = getInitialState();
+        window.classData = classData;
 
         function saveData() {
             localStorage.setItem('class_budget_data_v1', JSON.stringify(classData));
@@ -615,9 +703,44 @@
                 "모든 추가 항목을 초기화하고 체육대회 음료 비용(59,400원) 기본 상태로 돌리시겠습니까?",
                 () => {
                     classData = getInitialState();
+                    window.classData = classData;
                     saveData();
                 }
             );
+        }
+
+        function exportBackupJSON() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(classData, null, 2));
+            const dlAnchorElem = document.createElement('a');
+            dlAnchorElem.setAttribute("href", dataStr);
+            dlAnchorElem.setAttribute("download", `class_budget_backup_${new Date().toISOString().slice(0,10)}.json`);
+            document.body.appendChild(dlAnchorElem);
+            dlAnchorElem.click();
+            dlAnchorElem.remove();
+        }
+
+        function importBackupJSON(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const imported = JSON.parse(e.target.result);
+                    if (typeof imported === 'object' && imported !== null) {
+                        classData = imported;
+                        window.classData = classData;
+                        saveData();
+                        document.getElementById('backup-modal').classList.add('hidden');
+                        alert('백업 데이터가 성공적으로 복구되었습니다!');
+                    } else {
+                        alert('올바르지 않은 백업 파일 형지입니다.');
+                    }
+                } catch (err) {
+                    alert('파일을 읽는 중 오류가 발생했습니다: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
         }
 
         function getClassTotalSpent(classNum) {
@@ -638,6 +761,7 @@
 
         function renderSummary() {
             const tbody = document.getElementById('summary-table-body');
+            if (!tbody) return;
             tbody.innerHTML = '';
 
             let grandTotalSpent = 0;
@@ -701,7 +825,9 @@
         }
 
         function renderClassDetail() {
-            document.getElementById('current-class-title').textContent = `${currentSelectedClass}반`;
+            const titleElem = document.getElementById('current-class-title');
+            if (!titleElem) return;
+            titleElem.textContent = `${currentSelectedClass}반`;
 
             const btnContainer = document.getElementById('class-select-buttons');
             btnContainer.innerHTML = '';
@@ -879,6 +1005,8 @@
             renderSummary();
             renderClassDetail();
         }
+
+        window.render = render;
 
         window.onload = function() {
             render();
