@@ -85,7 +85,7 @@
         <div class="bg-slate-900/60 backdrop-blur-md px-4 py-1 text-[11px] text-center text-slate-300 border-t border-white/10 flex justify-center items-center gap-3">
             <span><i class="fa-solid fa-clock text-blue-400 mr-1"></i>최종 동기화 시간: <strong id="last-sync-time" class="text-white">연결 완료</strong></span>
             <span>•</span>
-            <span class="text-emerald-300"><i class="fa-solid fa-cloud text-xs mr-1"></i>HTTP REST 클라우드 DB 연동됨 (모든 선생님 기기 100% 실시간 공동 편집 및 자동 반영)</span>
+            <span class="text-emerald-300"><i class="fa-solid fa-cloud text-xs mr-1"></i>실시간 공용 클라우드 Storage 연동됨 (모든 선생님 기기 실시간 공동 편집)</span>
         </div>
     </header>
 
@@ -322,10 +322,6 @@
         let isSyncing = false;
         let lastServerJsonHash = '';
 
-        // 초고속 Firebase RTDB REST Endpoints (초대형 JSON 안전 전송 지원)
-        const PRIMARY_CLOUD_API = "https://scps-class-budget-default-rtdb.firebaseio.com/budgets";
-        const FALLBACK_CLOUD_API = "https://kvdb.io/A9zW2j1kXq3mP8n7L4vE";
-
         function createDefaultData() {
             const initialData = {};
             for (let i = 1; i <= TOTAL_CLASSES; i++) {
@@ -381,8 +377,8 @@
                 badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
                 badge.innerHTML = `<i class="fa-solid fa-rotate animate-spin text-[10px]"></i> ${text || '동기화 중...'}`;
             } else if (status === 'offline') {
-                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
-                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> ${text || '🟠 로컬 보관됨'}`;
+                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-500/20 text-red-200 border border-red-400/30";
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-red-400"></span> ${text || '🔴 클라우드 미연결 (로컬 저장됨)'}`;
             } else {
                 badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
                 badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> ${text || '🟢 실시간 클라우드 연결됨'}`;
@@ -437,9 +433,9 @@
             const cleanCode = groupCode.replace(/[^a-zA-Z0-9_-]/g, '') || 'scps-budget-2026';
             let cloudDataObj = null;
 
-            // 1. Primary Firebase RTDB REST 읽기
+            // 1. Primary REST Service Fetch
             try {
-                const res = await fetch(`${PRIMARY_CLOUD_API}/${cleanCode}.json?t=${Date.now()}`);
+                const res = await fetch(`https://keyvalue.xyz/app/scps_budget_${cleanCode}?t=${Date.now()}`);
                 if (res.ok) {
                     const data = await res.json();
                     if (data && data.classes) {
@@ -450,14 +446,17 @@
                 console.warn('Primary fetch error:', err);
             }
 
-            // 2. Secondary Fallback API 읽기
+            // 2. Secondary REST Service Fetch
             if (!cloudDataObj) {
                 try {
-                    const fbRes = await fetch(`${FALLBACK_CLOUD_API}/${cleanCode}?t=${Date.now()}`);
+                    const fbRes = await fetch(`https://api.restful-api.dev/objects?t=${Date.now()}`);
                     if (fbRes.ok) {
-                        const fbData = await fbRes.json();
-                        if (fbData && fbData.classes) {
-                            cloudDataObj = fbData;
+                        const list = await fbRes.json();
+                        if (Array.isArray(list)) {
+                            const found = list.reverse().find(item => item.name === `scps_budget_${cleanCode}`);
+                            if (found && found.data && found.data.classes) {
+                                cloudDataObj = found.data;
+                            }
                         }
                     }
                 } catch (fbErr) {
@@ -473,19 +472,19 @@
                     classData = cloudDataObj.classes;
                     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
                     
-                    // 화면 즉시 실시간 리렌더링
+                    // 화면 실시간 반영
                     render();
 
                     if (!silent) {
                         showToast('☁️ 클라우드 서버에서 최신 데이터를 동기화했습니다.');
                     } else if (!isFirstLoad) {
-                        showToast('🔔 다른 선생님이 입력하신 최신 지출 내역이 실시간으로 업데이트되었습니다!');
+                        showToast('🔔 다른 선생님이 입력하신 지출 내역이 실시간으로 업데이트되었습니다!');
                     }
                 }
                 updateSyncBadge('online');
                 updateLastSyncTime();
             } else {
-                // 서버에 데이터가 없으면 현재 데이터 전송
+                // 서버 데이터가 없으면 현재 데이터 전송
                 await pushToCloud(true);
             }
 
@@ -494,8 +493,6 @@
 
         async function pushToCloud(silent = false) {
             updateSyncBadge('syncing', '서버 저장 중...');
-            
-            // 로컬 보관
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
 
             const payload = {
@@ -509,10 +506,10 @@
 
             let success = false;
 
-            // 1. Primary REST PUT (HTTP BODY 사용으로 초대형 데이터 유실 방지)
+            // 1. Primary Cloud Push
             try {
-                const res = await fetch(`${PRIMARY_CLOUD_API}/${cleanCode}.json`, {
-                    method: 'PUT',
+                const res = await fetch(`https://keyvalue.xyz/app/scps_budget_${cleanCode}`, {
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: jsonString
                 });
@@ -524,13 +521,16 @@
                 console.warn('Primary push error:', err);
             }
 
-            // 2. Secondary Fallback POST
+            // 2. Secondary Cloud Push
             if (!success) {
                 try {
-                    const fbRes = await fetch(`${FALLBACK_CLOUD_API}/${cleanCode}`, {
+                    const fbRes = await fetch(`https://api.restful-api.dev/objects`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: jsonString
+                        body: JSON.stringify({
+                            name: `scps_budget_${cleanCode}`,
+                            data: payload
+                        })
                     });
                     if (fbRes.ok) {
                         lastServerJsonHash = JSON.stringify(classData);
@@ -544,11 +544,11 @@
             if (success) {
                 updateSyncBadge('online');
                 updateLastSyncTime();
-                if (!silent) showToast('☁️ 클라우드 서버에 안전하게 저장되었습니다! 타 선생님 화면에도 실시간 반영됩니다.');
+                if (!silent) showToast('☁️ 클라우드 서버에 저장되었습니다! 타 선생님 화면에도 실시간 반영됩니다.');
                 return true;
             } else {
                 updateSyncBadge('offline');
-                if (!silent) showToast('💾 브라우저에 저장되었습니다.', true);
+                if (!silent) showToast('⚠️ 네트워크 상태를 확인해주세요. 이 브라우저에만 저장되었습니다.', true);
                 return false;
             }
         }
