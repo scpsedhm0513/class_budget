@@ -18,15 +18,24 @@
         let db = null;
         let auth = null;
 
-        if (typeof __firebase_config !== 'undefined') {
+        // 사용자 지정 Firebase 설정 또는 시스템 기본 설정 불러오기
+        const customConfigStr = localStorage.getItem('custom_firebase_config');
+        let configToUse = null;
+
+        if (customConfigStr) {
+            try { configToUse = JSON.parse(customConfigStr); } catch(e){}
+        } else if (typeof __firebase_config !== 'undefined') {
+            try { configToUse = JSON.parse(__firebase_config); } catch(e){}
+        }
+
+        if (configToUse) {
             try {
-                const firebaseConfig = JSON.parse(__firebase_config);
-                const app = initializeApp(firebaseConfig);
+                const app = initializeApp(configToUse);
                 db = getFirestore(app);
                 auth = getAuth(app);
 
                 const initAuth = async () => {
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && !customConfigStr) {
                         await signInWithCustomToken(auth, __initial_auth_token);
                     } else {
                         await signInAnonymously(auth);
@@ -60,10 +69,12 @@
                 console.error("Firebase init failed:", e);
                 window.setSyncBadgeStatus(false);
             }
+        } else {
+            // 파이어베이스 설정이 없는 단독 로컬 실행 시
+            setTimeout(() => window.setSyncBadgeStatus(false), 500);
         }
 
         window.saveToCloud = async function(data) {
-            // Always save locally first as immediate fallback
             localStorage.setItem('class_budget_data_v1', JSON.stringify(data));
             
             if (!db || !auth?.currentUser) {
@@ -122,8 +133,11 @@
                 <button onclick="showBackupModal()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
                     <i class="fa-solid fa-box-archive"></i> 데이터 백업/복구
                 </button>
+                <button onclick="showCloudConfigModal()" class="bg-amber-400 hover:bg-amber-500 text-slate-900 font-semibold text-xs px-3 py-2 rounded-lg transition flex items-center gap-1 shadow">
+                    <i class="fa-solid fa-cloud-bolt"></i> 실시간 공유 설정
+                </button>
                 <button onclick="showShareGuideModal()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
-                    <i class="fa-solid fa-share-nodes"></i> 선생님 공유 방법
+                    <i class="fa-solid fa-share-nodes"></i> 선생님 공유 안내
                 </button>
                 <button onclick="exportToExcel()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-medium px-4 py-2 rounded-lg shadow transition flex items-center gap-2 text-sm">
                     <i class="fa-solid fa-file-excel"></i> 엑셀 파일(.xlsx) 다운로드
@@ -200,13 +214,14 @@
                 </button>
             </div>
 
+            <!-- Summary View Table -->
             <div id="view-summary" class="p-6">
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="text-lg font-bold text-slate-800">
                         <i class="fa-solid fa-list-check text-blue-600 mr-2"></i>반별 예산 및 잔액 현황표
                     </h2>
                     <span class="text-xs bg-blue-50 text-blue-700 px-3 py-1 rounded-full font-medium">
-                        * 체육대회 음료 비용(5,9,400원)이 모든 반에 기본 포함되어 있습니다.
+                        * 체육대회 음료 비용(59,400원)이 모든 반에 기본 포함되어 있습니다.
                     </span>
                 </div>
 
@@ -253,13 +268,11 @@
                         <p class="text-xs text-slate-500 mt-1">항목을 추가하면 상단 요약표 및 남은 금액이 자동으로 계산됩니다.</p>
                     </div>
 
-                    <!-- Class Select Buttons -->
                     <div class="flex flex-wrap gap-1" id="class-select-buttons">
                         <!-- JS populated buttons for 1반 - 10반 -->
                     </div>
                 </div>
 
-                <!-- Active Class Info Banner -->
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
                     <div class="text-center sm:text-left">
                         <span class="text-xs text-slate-500">배정 예산</span>
@@ -275,7 +288,6 @@
                     </div>
                 </div>
 
-                <!-- Add New Expense Form -->
                 <form id="add-expense-form" onsubmit="handleAddExpense(event)" class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
                     <div class="sm:col-span-3">
                         <label class="block text-xs font-semibold text-slate-600 mb-1">사용 내역 / 항목명</label>
@@ -296,7 +308,6 @@
                     </div>
                 </form>
 
-                <!-- Expenses Table for Selected Class -->
                 <div class="overflow-x-auto rounded-lg border border-slate-200">
                     <table class="w-full text-sm text-left text-slate-600">
                         <thead class="text-xs text-slate-700 uppercase bg-slate-100 border-b border-slate-200">
@@ -325,7 +336,6 @@
                     </p>
                 </div>
 
-                <!-- Excel Preview Mockup -->
                 <div class="bg-slate-900 text-slate-100 p-5 rounded-xl font-mono text-xs overflow-x-auto leading-relaxed border border-slate-800">
                     <p class="text-slate-400 mb-3">// 엑셀 시트 배치 예시 (A열 ~ F열 기준)</p>
                     <table class="w-full text-left border-collapse min-w-[600px]">
@@ -390,7 +400,6 @@
                     </table>
                 </div>
 
-                <!-- Explanation Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="bg-blue-50 border border-blue-200 p-4 rounded-xl">
                         <h3 class="font-bold text-blue-900 text-sm mb-2"><i class="fa-solid fa-key text-blue-600 mr-1"></i> 핵심 수식 설명</h3>
@@ -413,20 +422,52 @@
     </main>
 
     <!-- Custom Modal UI for Confirmations -->
-    <div id="confirm-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 border border-slate-100">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center font-bold text-lg flex-shrink-0">
-                    <i class="fa-solid fa-triangle-exclamation"></i>
+    <div id="cloud-config-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 border border-slate-100">
+            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                <h3 class="font-bold text-slate-800 flex items-center gap-2 text-base">
+                    <i class="fa-solid fa-cloud-bolt text-amber-500"></i> 실시간 공유 원인 및 연동 설정
+                </h3>
+                <button onclick="document.getElementById('cloud-config-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-sm">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            
+            <div class="space-y-3 text-xs text-slate-600 leading-relaxed">
+                <div class="bg-amber-50 border border-amber-200 p-3 rounded-xl text-amber-900">
+                    <p class="font-bold mb-1"><i class="fa-solid fa-circle-exclamation mr-1 text-amber-600"></i> 왜 실시간 동기화가 안 되었을까요?</p>
+                    <ol class="list-decimal list-inside space-y-1">
+                        <li><strong>파일 직접 전달:</strong> 다운로드한 `.html` 파일을 카톡/메일로 보낸 경우 각 선생님의 <strong>컴퓨터 개별 저장소</strong>에서만 작동합니다.</li>
+                        <li><strong>클라우드 미연동:</strong> 단독 파일 실행 시 공용 클라우드 DB 연결 설정이 포함되어야 실시간 연동됩니다.</li>
+                    </ol>
                 </div>
-                <div>
-                    <h3 class="font-bold text-slate-800" id="confirm-modal-title">확인</h3>
-                    <p class="text-xs text-slate-500 mt-0.5" id="confirm-modal-desc">정말 진행하시겠습니까?</p>
+
+                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
+                    <h4 class="font-bold text-slate-800 text-xs flex items-center gap-1">
+                        <i class="fa-solid fa-key text-blue-600"></i> 자체 파이어베이스(Firebase) DB 키 등록 (선택)
+                    </h4>
+                    <p class="text-[11px] text-slate-500">학교 전용 Firebase (구글 무료 DB) 설정 JSON을 입력하시면, 어디서든 이 HTML 파일 하나로 실시간 공유가 가능합니다.</p>
+                    <textarea id="firebase-config-input" rows="3" placeholder='{"apiKey": "...", "authDomain": "...", "projectId": "..."}' class="w-full p-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"></textarea>
+                    <div class="flex gap-2">
+                        <button onclick="saveCustomFirebaseConfig()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 rounded-lg transition text-xs">
+                            설정 저장 후 새로고침
+                        </button>
+                        <button onclick="clearCustomFirebaseConfig()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-3 py-1.5 rounded-lg transition text-xs">
+                            초기화
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-blue-50 p-3 rounded-xl border border-blue-100 text-blue-900">
+                    <p class="font-bold text-xs mb-1"><i class="fa-solid fa-lightbulb text-blue-600 mr-1"></i> 데이터 수동 공유 팁</p>
+                    <p class="text-[11px]">서버 연결 없이 쓰시려면, 작성 후 <strong>[백업 파일 다운로드]</strong> 기능으로 `.json` 파일을 추출해 카톡으로 공유하면 상대방이 [복구] 버튼으로 1초 만에 동일하게 불러올 수 있습니다!</p>
                 </div>
             </div>
-            <div class="flex justify-end gap-2 pt-2">
-                <button onclick="closeConfirmModal(false)" class="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition">취소</button>
-                <button id="confirm-modal-action-btn" class="px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition">확인</button>
+            
+            <div class="pt-2 flex justify-end">
+                <button onclick="document.getElementById('cloud-config-modal').classList.add('hidden')" class="bg-slate-800 hover:bg-slate-900 text-white font-semibold py-2 px-4 rounded-xl text-xs transition">
+                    닫기
+                </button>
             </div>
         </div>
     </div>
@@ -498,105 +539,41 @@
     </div>
 
     <script>
-        // Default Budget Settings
-        const DEFAULT_CLASS_BUDGET = 300000;
-        const SPORTS_DRINK_COST = 59400;
-        const TOTAL_CLASSES = 10;
-
-        let currentSelectedClass = 1;
-
-        function setSyncBadgeStatus(isSynced, updatedAt) {
-            const badge = document.getElementById('sync-status-badge');
-            const desc = document.getElementById('sync-time-desc');
-            const timeText = updatedAt ? new Date(updatedAt).toLocaleTimeString('ko-KR') : new Date().toLocaleTimeString('ko-KR');
-
-            if (badge) {
-                if (isSynced) {
-                    badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
-                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 저장됨`;
-                    if (desc) desc.textContent = `기본 예산 3,000,000원 (반별 300,000원) | 클라우드 동기화 완료 (${timeText})`;
-                } else {
-                    badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
-                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> 로컬 저장됨`;
-                    if (desc) desc.textContent = `기본 예산 3,000,000원 (반별 300,000원) | 브라우저 내 안전 저장 (${timeText})`;
-                }
-            }
-        }
-
-        function showSavingIndicator(isSaving) {
-            const spin = document.getElementById('sync-spin-icon');
-            if (spin) {
-                if (isSaving) spin.classList.add('fa-spin');
-                else spin.classList.remove('fa-spin');
-            }
-        }
-
-        function forceSyncData() {
-            saveData();
-            showSavingIndicator(true);
-            setTimeout(() => showSavingIndicator(false), 800);
-        }
-
-        function showBackupModal() {
-            document.getElementById('backup-modal').classList.remove('hidden');
-        }
-
-        function exportBackupJSON() {
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(classData, null, 2));
-            const downloadAnchor = document.createElement('a');
-            downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", `학급비_예산_백업_${new Date().toISOString().slice(0,10)}.json`);
-            document.body.appendChild(downloadAnchor);
-            downloadAnchor.click();
-            downloadAnchor.remove();
-        }
-
-        function importBackupJSON(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const imported = JSON.parse(e.target.result);
-                    if (imported && typeof imported === 'object') {
-                        classData = imported;
-                        saveData();
-                        alert('데이터 복구가 완료되었습니다!');
-                        document.getElementById('backup-modal').classList.add('hidden');
-                    } else {
-                        alert('유효하지 않은 백업 파일 형식입니다.');
-                    }
-                } catch (err) {
-                    alert('파일을 읽는 중 오류가 발생했습니다.');
-                }
-            };
-            reader.readAsText(file);
-        }
-
-        // Modal Helpers
-        let modalConfirmCallback = null;
-        function showConfirmModal(title, desc, onConfirm) {
-            document.getElementById('confirm-modal-title').textContent = title;
-            document.getElementById('confirm-modal-desc').textContent = desc;
-            modalConfirmCallback = onConfirm;
-            document.getElementById('confirm-modal').classList.remove('hidden');
-        }
-
-        function closeConfirmModal(confirmed) {
-            document.getElementById('confirm-modal').classList.add('hidden');
-            if (confirmed && typeof modalConfirmCallback === 'function') {
-                modalConfirmCallback();
-            }
-            modalConfirmCallback = null;
-        }
-
-        document.getElementById('confirm-modal-action-btn').onclick = () => closeConfirmModal(true);
-
         function showShareGuideModal() {
             document.getElementById('share-modal').classList.remove('hidden');
         }
 
-        // Load or create initial class data
+        function showCloudConfigModal() {
+            const saved = localStorage.getItem('custom_firebase_config');
+            if (saved) {
+                document.getElementById('firebase-config-input').value = saved;
+            }
+            document.getElementById('cloud-config-modal').classList.remove('hidden');
+        }
+
+        function saveCustomFirebaseConfig() {
+            const val = document.getElementById('firebase-config-input').value.trim();
+            if (!val) {
+                alert('Firebase 설정 JSON 값을 입력해주세요.');
+                return;
+            }
+            try {
+                JSON.parse(val);
+                localStorage.setItem('custom_firebase_config', val);
+                alert('파이어베이스 설정이 저장되었습니다. 페이지가 새로고침됩니다.');
+                window.location.reload();
+            } catch (e) {
+                alert('올바른 JSON 형식이 아닙니다. { "apiKey": ... } 형태인지 확인해주세요.');
+            }
+        }
+
+        function clearCustomFirebaseConfig() {
+            localStorage.removeItem('custom_firebase_config');
+            document.getElementById('firebase-config-input').value = '';
+            alert('파이어베이스 설정이 초기화되었습니다.');
+            window.location.reload();
+        }
+
         function getInitialState() {
             const saved = localStorage.getItem('class_budget_data_v1');
             if (saved) {
@@ -632,7 +609,6 @@
             render();
         }
 
-        // Reset Data
         function resetData() {
             showConfirmModal(
                 "전체 초기화",
@@ -644,7 +620,6 @@
             );
         }
 
-        // Calculations
         function getClassTotalSpent(classNum) {
             return (classData[classNum] || []).reduce((sum, item) => sum + Number(item.amount), 0);
         }
@@ -708,7 +683,6 @@
                 tbody.appendChild(tr);
             }
 
-            // Update Header/Footer Summary
             const grandBudget = DEFAULT_CLASS_BUDGET * TOTAL_CLASSES;
             const grandRemain = grandBudget - grandTotalSpent;
             const overallPercent = ((grandRemain / grandBudget) * 100).toFixed(1);
@@ -729,7 +703,6 @@
         function renderClassDetail() {
             document.getElementById('current-class-title').textContent = `${currentSelectedClass}반`;
 
-            // Class Selection Buttons
             const btnContainer = document.getElementById('class-select-buttons');
             btnContainer.innerHTML = '';
             for (let i = 1; i <= TOTAL_CLASSES; i++) {
@@ -747,7 +720,6 @@
                 btnContainer.appendChild(btn);
             }
 
-            // Stats for selected class
             const totalSpent = getClassTotalSpent(currentSelectedClass);
             const remain = DEFAULT_CLASS_BUDGET - totalSpent;
 
@@ -755,7 +727,6 @@
             document.getElementById('detail-class-remain').textContent = remain.toLocaleString() + '원';
             document.getElementById('detail-class-remain').className = `text-lg font-bold ${remain < 0 ? 'text-red-600' : 'text-emerald-600'}`;
 
-            // Expense Items Table
             const tbody = document.getElementById('detail-table-body');
             tbody.innerHTML = '';
 
@@ -788,7 +759,6 @@
             });
         }
 
-        // Add Expense Handler
         function handleAddExpense(e) {
             e.preventDefault();
             const nameInput = document.getElementById('input-item-name');
@@ -809,7 +779,6 @@
 
             classData[currentSelectedClass].push(newExpense);
 
-            // Reset Form Inputs
             nameInput.value = '';
             amountInput.value = '';
             noteInput.value = '';
@@ -817,7 +786,6 @@
             saveData();
         }
 
-        // Delete Expense Handler
         function deleteExpense(itemId) {
             showConfirmModal(
                 "지출 항목 삭제",
@@ -829,7 +797,6 @@
             );
         }
 
-        // Navigation Switcher
         function switchTab(tabName) {
             document.querySelectorAll('#view-tabs .tab-btn').forEach(btn => btn.classList.remove('active'));
             document.getElementById('view-summary').classList.add('hidden');
@@ -852,7 +819,6 @@
         }
 
         function exportToExcel() {
-            // Build Excel Data Rows
             const worksheetData = [
                 ["10개 반 학급비 예산 사용 및 잔액 집계표"],
                 ["생성일시: " + new Date().toLocaleDateString('ko-KR')],
@@ -860,26 +826,23 @@
                 ["반 구분", "기본 예산", "체육대회 음료비", "기타 지출", "반별 사용 총액", "반별 남은 금액", "비고"]
             ];
 
-            // Add rows 1반 to 10반
             for (let i = 1; i <= TOTAL_CLASSES; i++) {
                 const drinksSpent = getClassDrinksSpent(i);
                 const extraSpent = getClassExtraSpent(i);
-                const rowNum = i + 4; // Excel row number offset
+                const rowNum = i + 4;
 
                 worksheetData.push([
                     `${i}반`,
                     DEFAULT_CLASS_BUDGET,
                     drinksSpent,
                     extraSpent,
-                    { t: 'n', f: `SUM(C${rowNum}:D${rowNum})` }, // Formula for total spent
-                    { t: 'n', f: `B${rowNum}-E${rowNum}` },     // Formula for remaining
+                    { t: 'n', f: `SUM(C${rowNum}:D${rowNum})` },
+                    { t: 'n', f: `B${rowNum}-E${rowNum}` },
                     i === 1 ? "체육대회 음료수 59,400원 자동 반영됨" : ""
                 ]);
             }
 
-            // Add Summary Footer Row
             const lastClassRow = TOTAL_CLASSES + 4;
-            const summaryRow = lastClassRow + 1;
             worksheetData.push([
                 "합계",
                 { t: 'n', f: `SUM(B5:B${lastClassRow})` },
@@ -890,24 +853,15 @@
                 "전체 자동 수식 적용 완료"
             ]);
 
-            // Create Workbook
             const wb = XLSX.utils.book_new();
             const ws = XLSX.utils.aoa_to_sheet(worksheetData);
 
-            // Set Column Widths
             ws['!cols'] = [
-                { wch: 10 }, // 반 구분
-                { wch: 15 }, // 기본 예산
-                { wch: 18 }, // 체육대회 음료비
-                { wch: 15 }, // 기타 지출
-                { wch: 18 }, // 반별 사용 총액
-                { wch: 18 }, // 반별 남은 금액
-                { wch: 35 }  // 비고
+                { wch: 10 }, { wch: 15 }, { wch: 18 }, { wch: 15 }, { wch: 18 }, { wch: 18 }, { wch: 35 }
             ];
 
             XLSX.utils.book_append_sheet(wb, ws, "학급비 예산 현황");
 
-            // Also create detailed sheet for each class item
             const detailRows = [["반명", "항목명", "지출 금액", "비고"]];
             for (let i = 1; i <= TOTAL_CLASSES; i++) {
                 (classData[i] || []).forEach(item => {
@@ -918,17 +872,14 @@
             wsDetail['!cols'] = [{ wch: 10 }, { wch: 25 }, { wch: 15 }, { wch: 30 }];
             XLSX.utils.book_append_sheet(wb, wsDetail, "반별 세부 지출 내역");
 
-            // Trigger Download
             XLSX.writeFile(wb, "학급비_예산관리_10개반_통합.xlsx");
         }
 
-        // Main Render Controller
         function render() {
             renderSummary();
             renderClassDetail();
         }
 
-        // Initial Load
         window.onload = function() {
             render();
         };
