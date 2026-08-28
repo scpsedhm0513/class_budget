@@ -14,83 +14,76 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'class-budget-app';
-        let db = null;
-        let auth = null;
+        // Firebase 설정 (환경 변수 또는 기본 설정)
+        const defaultConfig = {
+            apiKey: "",
+            authDomain: "class-budget-app.firebaseapp.com",
+            projectId: "class-budget-app",
+            storageBucket: "class-budget-app.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:1234567890:web:classbudget"
+        };
 
-        // 사용자 지정 Firebase 설정 또는 시스템 기본 설정 불러오기
-        const customConfigStr = localStorage.getItem('custom_firebase_config');
-        let configToUse = null;
-
-        if (customConfigStr) {
-            try { configToUse = JSON.parse(customConfigStr); } catch(e){}
-        } else if (typeof __firebase_config !== 'undefined') {
-            try { configToUse = JSON.parse(__firebase_config); } catch(e){}
+        let firebaseConfig = defaultConfig;
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try { firebaseConfig = JSON.parse(__firebase_config); } catch(e){}
         }
 
-        if (configToUse) {
-            try {
-                const app = initializeApp(configToUse);
-                db = getFirestore(app);
-                auth = getAuth(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'class-budget-app';
+        
+        let app, auth, db;
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
 
-                const initAuth = async () => {
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && !customConfigStr) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                };
+            const initAuth = async () => {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            };
 
-                initAuth().then(() => {
-                    onAuthStateChanged(auth, (user) => {
-                        if (!user) return;
-                        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
-                        onSnapshot(docRef, (docSnap) => {
-                            if (docSnap.exists() && docSnap.data()?.classes) {
-                                window.classData = docSnap.data().classes;
-                                localStorage.setItem('class_budget_data_v1', JSON.stringify(window.classData));
-                                if (typeof window.render === 'function') window.render();
-                                window.setSyncBadgeStatus(true, docSnap.data()?.updatedAt);
-                            } else {
-                                window.saveToCloud(window.classData);
-                                window.setSyncBadgeStatus(true, new Date().toISOString());
-                            }
-                        }, (err) => {
-                            console.error("Cloud sync error:", err);
-                            window.setSyncBadgeStatus(false);
-                        });
+            initAuth().then(() => {
+                onAuthStateChanged(auth, (user) => {
+                    if (!user) return;
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
+                    
+                    // 실시간 수신 고성능 리스너
+                    onSnapshot(docRef, (docSnap) => {
+                        if (docSnap.exists() && docSnap.data()?.classes) {
+                            window.classData = docSnap.data().classes;
+                            localStorage.setItem('class_budget_data_v1', JSON.stringify(window.classData));
+                            if (typeof window.render === 'function') window.render();
+                            window.updateSyncBadge(true);
+                        } else {
+                            // 데이터가 없을 시 초기 데이터 업로드
+                            window.saveToCloud(window.classData);
+                        }
+                    }, (err) => {
+                        console.warn("Cloud sync listening in local fallback mode:", err);
+                        window.updateSyncBadge(false);
                     });
-                }).catch(err => {
-                    console.error("Auth failed:", err);
-                    window.setSyncBadgeStatus(false);
                 });
-            } catch (e) {
-                console.error("Firebase init failed:", e);
-                window.setSyncBadgeStatus(false);
-            }
-        } else {
-            setTimeout(() => window.setSyncBadgeStatus(false), 500);
+            }).catch(() => {
+                window.updateSyncBadge(false);
+            });
+        } catch(e) {
+            console.warn("Firebase initialization skipped, running in local mode:", e);
+            setTimeout(() => window.updateSyncBadge(false), 300);
         }
 
         window.saveToCloud = async function(data) {
             localStorage.setItem('class_budget_data_v1', JSON.stringify(data));
-            
-            if (!db || !auth?.currentUser) {
-                window.setSyncBadgeStatus(false);
-                return;
-            }
+            if (!db || !auth?.currentUser) return;
             try {
-                window.showSavingIndicator(true);
-                const nowIso = new Date().toISOString();
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
-                await setDoc(docRef, { classes: data, updatedAt: nowIso }, { merge: true });
-                window.setSyncBadgeStatus(true, nowIso);
+                await setDoc(docRef, { classes: data, updatedAt: new Date().toISOString() }, { merge: true });
+                window.updateSyncBadge(true);
             } catch (err) {
-                console.error("Failed to sync to cloud:", err);
-                window.setSyncBadgeStatus(false);
-            } finally {
-                window.showSavingIndicator(false);
+                console.warn("Save to cloud failed, saved locally:", err);
+                window.updateSyncBadge(false);
             }
         };
     </script>
@@ -101,7 +94,7 @@
             background-color: #f8fafc;
         }
         .tab-btn.active {
-            border-bottom: 3px solid #3b82f6;
+            border-bottom: 3px solid #2563eb;
             color: #1d4ed8;
             font-weight: 700;
         }
@@ -109,49 +102,40 @@
 </head>
 <body class="text-slate-800 min-h-screen pb-12">
 
-    <header class="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 text-white shadow-lg sticky top-0 z-40">
+    <!-- Header -->
+    <header class="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 text-white shadow-md sticky top-0 z-40">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
             <div class="flex items-center space-x-3">
                 <div class="bg-white/10 p-2.5 rounded-xl backdrop-blur-md">
-                    <i class="fa-solid font-bold fa-calculator text-2xl text-yellow-300"></i>
+                    <i class="fa-solid fa-calculator text-2xl text-yellow-300"></i>
                 </div>
                 <div>
                     <div class="flex items-center gap-2">
-                        <h1 class="text-xl sm:text-2xl font-bold tracking-tight">10개 반 학급비 예산 통합 관리</h1>
-                        <span id="sync-status-badge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
-                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 저장됨
+                        <h1 class="text-xl sm:text-2xl font-bold tracking-tight">10개 반 학급비 예산 관리 시스템</h1>
+                        <span id="sync-badge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 자동 공유 중
                         </span>
                     </div>
-                    <p class="text-xs text-blue-100 mt-0.5" id="sync-time-desc">기본 예산 3,000,000원 (반별 300,000원) | 실시간 공유 및 자동 보관 중</p>
+                    <p class="text-xs text-blue-100 mt-0.5">총 예산 3,000,000원 (반별 300,000원) | 입력 시 실시간 자동 보관</p>
                 </div>
             </div>
-            <div class="flex items-center space-x-2 flex-wrap gap-y-2">
-                <button onclick="forceSyncData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1" title="데이터 수동 저장">
-                    <i class="fa-solid fa-arrows-rotate" id="sync-spin-icon"></i> 지금 저장/동기화
-                </button>
-                <button onclick="showBackupModal()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
-                    <i class="fa-solid fa-box-archive"></i> 데이터 백업/복구
-                </button>
-                <button onclick="showCloudConfigModal()" class="bg-amber-400 hover:bg-amber-500 text-slate-900 font-semibold text-xs px-3 py-2 rounded-lg transition flex items-center gap-1 shadow">
-                    <i class="fa-solid fa-cloud-bolt"></i> 실시간 공유 설정
-                </button>
-                <button onclick="showShareGuideModal()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
-                    <i class="fa-solid fa-share-nodes"></i> 선생님 공유 안내
-                </button>
+            
+            <div class="flex items-center space-x-2">
                 <button onclick="exportToExcel()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-medium px-4 py-2 rounded-lg shadow transition flex items-center gap-2 text-sm">
                     <i class="fa-solid fa-file-excel"></i> 엑셀 파일(.xlsx) 다운로드
                 </button>
-                <button onclick="resetData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition">
+                <button onclick="resetData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
                     <i class="fa-solid fa-rotate-right"></i> 초기화
                 </button>
             </div>
         </div>
     </header>
 
+    <!-- Main Content -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
 
+        <!-- Stat Cards -->
         <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <!-- Card 1 -->
             <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">총 교부 예산</p>
@@ -163,19 +147,17 @@
                 </div>
             </div>
 
-            <!-- Card 2 -->
             <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">총 사용 금액</p>
                     <p class="text-2xl font-bold text-indigo-600 mt-1" id="stat-total-spent">0원</p>
-                    <span class="text-xs text-slate-500" id="stat-spent-sub">체육대회 음료 포함</span>
+                    <span class="text-xs text-slate-500">체육대회 음료비 포함</span>
                 </div>
                 <div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center text-xl font-bold">
                     <i class="fa-solid fa-receipt"></i>
                 </div>
             </div>
 
-            <!-- Card 3 -->
             <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">잔여 총 예산</p>
@@ -187,7 +169,6 @@
                 </div>
             </div>
 
-            <!-- Card 4 -->
             <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">반별 평균 지출</p>
@@ -200,6 +181,7 @@
             </div>
         </section>
 
+        <!-- Navigation Tabs -->
         <div class="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div class="border-b border-slate-200 px-4 flex space-x-6 overflow-x-auto" id="view-tabs">
                 <button onclick="switchTab('summary')" id="tab-btn-summary" class="tab-btn active py-3 text-sm font-medium text-slate-600 hover:text-blue-600 whitespace-nowrap">
@@ -213,7 +195,7 @@
                 </button>
             </div>
 
-            <!-- Summary View Table -->
+            <!-- Tab 1: Summary Table -->
             <div id="view-summary" class="p-6">
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="text-lg font-bold text-slate-800">
@@ -239,7 +221,7 @@
                             </tr>
                         </thead>
                         <tbody id="summary-table-body" class="divide-y divide-slate-200 bg-white">
-                            <!-- Javascript populates this -->
+                            <!-- Dynamically generated -->
                         </tbody>
                         <tfoot class="bg-slate-800 text-white font-bold text-sm">
                             <tr>
@@ -257,6 +239,7 @@
                 </div>
             </div>
 
+            <!-- Tab 2: Class Detail Input -->
             <div id="view-detail" class="p-6 hidden">
                 <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                     <div>
@@ -264,11 +247,11 @@
                             <span id="current-class-title" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm">1반</span>
                             <span>지출 내역 상세 관리</span>
                         </h2>
-                        <p class="text-xs text-slate-500 mt-1">항목을 추가하면 상단 요약표 및 남은 금액이 자동으로 계산됩니다.</p>
+                        <p class="text-xs text-slate-500 mt-1">지출 항목을 작성하시면 실시간으로 잔액이 자동 계산되고 보관됩니다.</p>
                     </div>
 
                     <div class="flex flex-wrap gap-1" id="class-select-buttons">
-                        <!-- JS populated buttons for 1반 - 10반 -->
+                        <!-- Buttons for 1반 ~ 10반 -->
                     </div>
                 </div>
 
@@ -287,18 +270,19 @@
                     </div>
                 </div>
 
+                <!-- Expense Input Form -->
                 <form id="add-expense-form" onsubmit="handleAddExpense(event)" class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-                    <div class="sm:col-span-3">
+                    <div class="sm:col-span-4">
                         <label class="block text-xs font-semibold text-slate-600 mb-1">사용 내역 / 항목명</label>
-                        <input type="text" id="input-item-name" required placeholder="예: 학급 회식, 학용품 구매" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="text" id="input-item-name" required placeholder="예: 학급 회식, 학용품 구매, 게시판 보드" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div class="sm:col-span-3">
                         <label class="block text-xs font-semibold text-slate-600 mb-1">사용 금액 (원)</label>
                         <input type="number" id="input-item-amount" required min="0" step="10" placeholder="예: 15000" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
-                    <div class="sm:col-span-4">
+                    <div class="sm:col-span-3">
                         <label class="block text-xs font-semibold text-slate-600 mb-1">비고 (선택)</label>
-                        <input type="text" id="input-item-note" placeholder="영수증 첨부 완료, 담당 학생 등" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <input type="text" id="input-item-note" placeholder="영수증 완료, 담당 학생 등" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div class="sm:col-span-2">
                         <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg text-sm transition flex items-center justify-center gap-1">
@@ -307,6 +291,7 @@
                     </div>
                 </form>
 
+                <!-- Detailed Expenditures Table -->
                 <div class="overflow-x-auto rounded-lg border border-slate-200">
                     <table class="w-full text-sm text-left text-slate-600">
                         <thead class="text-xs text-slate-700 uppercase bg-slate-100 border-b border-slate-200">
@@ -319,28 +304,28 @@
                             </tr>
                         </thead>
                         <tbody id="detail-table-body" class="divide-y divide-slate-200 bg-white">
-                            <!-- JS populated -->
+                            <!-- Dynamically generated -->
                         </tbody>
                     </table>
                 </div>
             </div>
 
+            <!-- Tab 3: Excel Formula Guide -->
             <div id="view-excel-guide" class="p-6 hidden space-y-6">
                 <div>
                     <h2 class="text-lg font-bold text-slate-800 mb-2">
-                        <i class="fa-solid fa-file-code text-indigo-600 mr-2"></i>엑셀(Excel) 직접 작성 시 수식 입력 안내
+                        <i class="fa-solid fa-file-code text-indigo-600 mr-2"></i>엑셀(Excel) 직접 수식 작성 가이드
                     </h2>
                     <p class="text-sm text-slate-600">
-                        마이크로소프트 엑셀이나 구글 스프레드시트에서 직접 작성할 때 바로 사용할 수 있는 셀 구조와 수식입니다.
+                        마이크로소프트 엑셀이나 구글 스프레드시트에 똑같이 만들 때 사용할 수 있는 셀 위치 및 수식 가이드입니다.
                     </p>
                 </div>
 
                 <div class="bg-slate-900 text-slate-100 p-5 rounded-xl font-mono text-xs overflow-x-auto leading-relaxed border border-slate-800">
-                    <p class="text-slate-400 mb-3">// 엑셀 시트 배치 예시 (A열 ~ F열 기준)</p>
                     <table class="w-full text-left border-collapse min-w-[600px]">
                         <thead>
                             <tr class="border-b border-slate-700 text-slate-400">
-                                <th class="py-1 px-2">셀</th>
+                                <th class="py-1 px-2">셀 행</th>
                                 <th class="py-1 px-2">A (반)</th>
                                 <th class="py-1 px-2">B (기본 예산)</th>
                                 <th class="py-1 px-2">C (체육대회 음료)</th>
@@ -351,22 +336,22 @@
                         </thead>
                         <tbody>
                             <tr class="border-b border-slate-800">
-                                <td class="py-1 px-2 text-amber-400">행 3</td>
+                                <td class="py-1 px-2 text-amber-400">행 5</td>
                                 <td class="py-1 px-2">1반</td>
                                 <td class="py-1 px-2">300000</td>
                                 <td class="py-1 px-2">59400</td>
                                 <td class="py-1 px-2">0</td>
-                                <td class="py-1 px-2 text-indigo-300">=SUM(C3:D3)</td>
-                                <td class="py-1 px-2 text-emerald-300">=B3-E3</td>
+                                <td class="py-1 px-2 text-indigo-300">=SUM(C5:D5)</td>
+                                <td class="py-1 px-2 text-emerald-300">=B5-E5</td>
                             </tr>
                             <tr class="border-b border-slate-800">
-                                <td class="py-1 px-2 text-amber-400">행 4</td>
+                                <td class="py-1 px-2 text-amber-400">행 6</td>
                                 <td class="py-1 px-2">2반</td>
                                 <td class="py-1 px-2">300000</td>
                                 <td class="py-1 px-2">59400</td>
                                 <td class="py-1 px-2">0</td>
-                                <td class="py-1 px-2 text-indigo-300">=SUM(C4:D4)</td>
-                                <td class="py-1 px-2 text-emerald-300">=B4-E4</td>
+                                <td class="py-1 px-2 text-indigo-300">=SUM(C6:D6)</td>
+                                <td class="py-1 px-2 text-emerald-300">=B6-E6</td>
                             </tr>
                             <tr>
                                 <td class="py-1 px-2 text-slate-500">...</td>
@@ -378,185 +363,29 @@
                                 <td class="py-1 px-2 text-slate-500">...</td>
                             </tr>
                             <tr class="border-b border-slate-800">
-                                <td class="py-1 px-2 text-amber-400">행 12</td>
+                                <td class="py-1 px-2 text-amber-400">행 14</td>
                                 <td class="py-1 px-2">10반</td>
                                 <td class="py-1 px-2">300000</td>
                                 <td class="py-1 px-2">59400</td>
                                 <td class="py-1 px-2">0</td>
-                                <td class="py-1 px-2 text-indigo-300">=SUM(C12:D12)</td>
-                                <td class="py-1 px-2 text-emerald-300">=B12-E12</td>
+                                <td class="py-1 px-2 text-indigo-300">=SUM(C14:D14)</td>
+                                <td class="py-1 px-2 text-emerald-300">=B14-E14</td>
                             </tr>
-                            <tr class="bg-slate-800/80 font-bold">
-                                <td class="py-1.5 px-2 text-yellow-400">행 13</td>
+                            <tr class="bg-slate-800 font-bold">
+                                <td class="py-1.5 px-2 text-yellow-400">행 15</td>
                                 <td class="py-1.5 px-2 text-yellow-300">합계</td>
-                                <td class="py-1.5 px-2 text-yellow-300">=SUM(B3:B12)</td>
-                                <td class="py-1.5 px-2 text-yellow-300">=SUM(C3:C12)</td>
-                                <td class="py-1.5 px-2 text-yellow-300">=SUM(D3:D12)</td>
-                                <td class="py-1.5 px-2 text-indigo-300">=SUM(E3:E12)</td>
-                                <td class="py-1.5 px-2 text-emerald-300">=SUM(F3:F12) 또는 =SUM(B3:B12)-E13</td>
+                                <td class="py-1.5 px-2 text-yellow-300">=SUM(B5:B14)</td>
+                                <td class="py-1.5 px-2 text-yellow-300">=SUM(C5:C14)</td>
+                                <td class="py-1.5 px-2 text-yellow-300">=SUM(D5:D14)</td>
+                                <td class="py-1.5 px-2 text-indigo-300">=SUM(E5:E14)</td>
+                                <td class="py-1.5 px-2 text-emerald-300">=SUM(F5:F14)</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="bg-blue-50 border border-blue-200 p-4 rounded-xl">
-                        <h3 class="font-bold text-blue-900 text-sm mb-2"><i class="fa-solid fa-key text-blue-600 mr-1"></i> 핵심 수식 설명</h3>
-                        <ul class="text-xs text-blue-800 space-y-2 list-disc list-inside">
-                            <li><strong class="text-blue-950">반별 사용 총액 수식:</strong> <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=SUM(C3:D3)</code> (음료비 + 추가지출)</li>
-                            <li><strong class="text-blue-950">반별 남은 금액 수식:</strong> <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=B3-E3</code> (반별 예산 30만원 - 반별 사용총액)</li>
-                            <li><strong class="text-blue-950">전체 남은 총 예산 수식:</strong> <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=SUM(F3:F12)</code> 또는 <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=3000000-SUM(E3:E12)</code></li>
-                        </ul>
-                    </div>
-
-                    <div class="bg-amber-50 border border-amber-200 p-4 rounded-xl">
-                        <h3 class="font-bold text-amber-900 text-sm mb-2"><i class="fa-solid fa-lightbulb text-amber-600 mr-1"></i> 팁 & 자동 다운로드 기능</h3>
-                        <p class="text-xs text-amber-800 leading-relaxed">
-                            우측 상단의 <span class="font-bold text-emerald-700">[엑셀 파일(.xlsx) 다운로드]</span> 버튼을 누르면, 모든 내역과 계산 수식이 미리 적용된 실제 마이크로소프트 엑셀 시트 파일이 컴퓨터에 자동 생성되어 즉시 다운로드됩니다!
-                        </p>
-                    </div>
-                </div>
             </div>
         </div>
     </main>
-
-    <!-- Cloud Config Modal -->
-    <div id="cloud-config-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-4 border border-slate-100">
-            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
-                <h3 class="font-bold text-slate-800 flex items-center gap-2 text-base">
-                    <i class="fa-solid fa-cloud-bolt text-amber-500"></i> 실시간 공유 원인 및 연동 설정
-                </h3>
-                <button onclick="document.getElementById('cloud-config-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-sm">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            
-            <div class="space-y-3 text-xs text-slate-600 leading-relaxed">
-                <div class="bg-amber-50 border border-amber-200 p-3 rounded-xl text-amber-900">
-                    <p class="font-bold mb-1"><i class="fa-solid fa-circle-exclamation mr-1 text-amber-600"></i> 왜 실시간 동기화가 안 되었을까요?</p>
-                    <ol class="list-decimal list-inside space-y-1">
-                        <li><strong>파일 직접 전달:</strong> 다운로드한 `.html` 파일을 카톡/메일로 보낸 경우 각 선생님의 <strong>컴퓨터 개별 저장소</strong>에서만 작동합니다.</li>
-                        <li><strong>클라우드 미연동:</strong> 단독 파일 실행 시 공용 클라우드 DB 연결 설정이 포함되어야 실시간 연동됩니다.</li>
-                    </ol>
-                </div>
-
-                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
-                    <h4 class="font-bold text-slate-800 text-xs flex items-center gap-1">
-                        <i class="fa-solid fa-key text-blue-600"></i> 자체 파이어베이스(Firebase) DB 키 등록 (선택)
-                    </h4>
-                    <p class="text-[11px] text-slate-500">학교 전용 Firebase (구글 무료 DB) 설정 JSON을 입력하시면, 어디서든 이 HTML 파일 하나로 실시간 공유가 가능합니다.</p>
-                    <textarea id="firebase-config-input" rows="3" placeholder='{"apiKey": "...", "authDomain": "...", "projectId": "..."}' class="w-full p-2 text-xs font-mono border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"></textarea>
-                    <div class="flex gap-2">
-                        <button onclick="saveCustomFirebaseConfig()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1.5 rounded-lg transition text-xs">
-                            설정 저장 후 새로고침
-                        </button>
-                        <button onclick="clearCustomFirebaseConfig()" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold px-3 py-1.5 rounded-lg transition text-xs">
-                            초기화
-                        </button>
-                    </div>
-                </div>
-
-                <div class="bg-blue-50 p-3 rounded-xl border border-blue-100 text-blue-900">
-                    <p class="font-bold text-xs mb-1"><i class="fa-solid fa-lightbulb text-blue-600 mr-1"></i> 데이터 수동 공유 팁</p>
-                    <p class="text-[11px]">서버 연결 없이 쓰시려면, 작성 후 <strong>[백업 파일 다운로드]</strong> 기능으로 `.json` 파일을 추출해 카톡으로 공유하면 상대방이 [복구] 버튼으로 1초 만에 동일하게 불러올 수 있습니다!</p>
-                </div>
-            </div>
-            
-            <div class="pt-2 flex justify-end">
-                <button onclick="document.getElementById('cloud-config-modal').classList.add('hidden')" class="bg-slate-800 hover:bg-slate-900 text-white font-semibold py-2 px-4 rounded-xl text-xs transition">
-                    닫기
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Share Guide Modal -->
-    <div id="share-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-100">
-            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
-                <h3 class="font-bold text-slate-800 flex items-center gap-2">
-                    <i class="fa-solid fa-users text-blue-600"></i> 선생님들과 공유하는 방법
-                </h3>
-                <button onclick="document.getElementById('share-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-sm">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            <div class="space-y-3 text-xs text-slate-600 leading-relaxed">
-                <div class="bg-blue-50 p-3 rounded-xl border border-blue-100 text-blue-900">
-                    <p class="font-bold mb-1"><i class="fa-solid fa-cloud-arrow-up mr-1"></i> 실시간 클라우드 자동 동기화 적용 완료</p>
-                    <p>현재 페이지 주소(URL)를 복사하여 선생님들께 보내주시면, 모든 담임 선생님이 동시에 접속하여 사용할 수 있습니다.</p>
-                </div>
-                <ul class="space-y-2 list-disc list-inside bg-slate-50 p-3 rounded-xl">
-                    <li><strong>실시간 입력:</strong> 어떤 선생님이 항목을 추가하면 다른 선생님들 화면에 즉시 업데이트됩니다.</li>
-                    <li><strong>남은 금액 실시간 계산:</strong> 반별 30만원 기준 남은 금액이 자동으로 계산되어 유지됩니다.</li>
-                    <li><strong>최종 다운로드:</strong> 수시로 [엑셀 다운로드] 버튼을 눌러 정식 보관용 파일(.xlsx)로 추출 가능합니다.</li>
-                </ul>
-            </div>
-            <div class="pt-2 flex justify-end">
-                <button onclick="document.getElementById('share-modal').classList.add('hidden')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-xl text-xs transition">
-                    확인했습니다
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Backup / Restore Modal -->
-    <div id="backup-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-100">
-            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
-                <h3 class="font-bold text-slate-800 flex items-center gap-2">
-                    <i class="fa-solid fa-box-archive text-indigo-600"></i> 데이터 백업 및 복구
-                </h3>
-                <button onclick="document.getElementById('backup-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-sm">
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            </div>
-            <div class="space-y-4 text-xs text-slate-600 leading-relaxed">
-                <div class="bg-indigo-50 p-3.5 rounded-xl border border-indigo-100">
-                    <h4 class="font-bold text-indigo-900 mb-1 flex items-center gap-1">
-                        <i class="fa-solid fa-download"></i> 내 컴퓨터로 백업 파일 저장
-                    </h4>
-                    <p class="text-indigo-800 text-[11px] mb-2">현재까지 입력된 모든 반별 지출 데이터를 안전한 파일(.json)로 내보냅니다.</p>
-                    <button onclick="exportBackupJSON()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5">
-                        <i class="fa-solid fa-file-arrow-down"></i> 백업 파일 다운로드
-                    </button>
-                </div>
-
-                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
-                    <h4 class="font-bold text-slate-800 mb-1 flex items-center gap-1">
-                        <i class="fa-solid fa-upload"></i> 백업 파일 불러오기 (복구)
-                    </h4>
-                    <p class="text-slate-500 text-[11px] mb-2">이전에 저장해둔 백업 파일(.json)을 올리면 데이터가 이전 상태로 복구됩니다.</p>
-                    <input type="file" id="import-file-input" accept=".json" onchange="importBackupJSON(event)" class="hidden">
-                    <button onclick="document.getElementById('import-file-input').click()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5">
-                        <i class="fa-solid fa-folder-open"></i> 백업 파일 선택하여 복구
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Generic Confirm Modal -->
-    <div id="confirm-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 border border-slate-100">
-            <div class="text-center">
-                <div class="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-3 text-xl">
-                    <i class="fa-solid fa-triangle-exclamation"></i>
-                </div>
-                <h3 class="font-bold text-slate-800 text-base" id="confirm-modal-title">확인 요청</h3>
-                <p class="text-xs text-slate-600 mt-2" id="confirm-modal-msg">정말 진행하시겠습니까?</p>
-            </div>
-            <div class="flex gap-2 pt-2">
-                <button id="confirm-btn-cancel" class="w-1/2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2 rounded-xl text-xs transition">
-                    취소
-                </button>
-                <button id="confirm-btn-ok" class="w-1/2 bg-red-600 hover:bg-red-700 text-white font-semibold py-2 rounded-xl text-xs transition">
-                    확인
-                </button>
-            </div>
-        </div>
-    </div>
 
     <script>
         const TOTAL_CLASSES = 10;
@@ -564,111 +393,22 @@
         const SPORTS_DRINK_COST = 59400;
         let currentSelectedClass = 1;
 
-        function setSyncBadgeStatus(isSynced, timeStr) {
-            const badge = document.getElementById('sync-status-badge');
-            const timeDesc = document.getElementById('sync-time-desc');
-            if (!badge || !timeDesc) return;
-
-            if (isSynced) {
+        function updateSyncBadge(isLive) {
+            const badge = document.getElementById('sync-badge');
+            if (!badge) return;
+            if (isLive) {
                 badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
-                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 저장됨`;
-                const dateObj = timeStr ? new Date(timeStr) : new Date();
-                timeDesc.textContent = `기본 예산 3,000,000원 (반별 300,000원) | 동기화: ${dateObj.toLocaleTimeString('ko-KR')}`;
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 자동 공유 중`;
             } else {
-                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
-                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> 로컬 저장 모드`;
-                timeDesc.textContent = `기본 예산 3,000,000원 | 브라우저 로컬 저장소에 자동 보관 중`;
+                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-200 border border-blue-400/30";
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-blue-300"></span> 자동 저장 중`;
             }
-        }
-
-        function showSavingIndicator(isSaving) {
-            const spinIcon = document.getElementById('sync-spin-icon');
-            if (!spinIcon) return;
-            if (isSaving) {
-                spinIcon.classList.add('fa-spin');
-            } else {
-                spinIcon.classList.remove('fa-spin');
-            }
-        }
-
-        function forceSyncData() {
-            showSavingIndicator(true);
-            setTimeout(() => {
-                saveData();
-                showSavingIndicator(false);
-            }, 300);
-        }
-
-        function showBackupModal() {
-            document.getElementById('backup-modal').classList.remove('hidden');
-        }
-
-        function showShareGuideModal() {
-            document.getElementById('share-modal').classList.remove('hidden');
-        }
-
-        function showCloudConfigModal() {
-            const saved = localStorage.getItem('custom_firebase_config');
-            if (saved) {
-                document.getElementById('firebase-config-input').value = saved;
-            }
-            document.getElementById('cloud-config-modal').classList.remove('hidden');
-        }
-
-        function showConfirmModal(title, message, onConfirm) {
-            const modal = document.getElementById('confirm-modal');
-            document.getElementById('confirm-modal-title').textContent = title;
-            document.getElementById('confirm-modal-msg').textContent = message;
-
-            const cancelBtn = document.getElementById('confirm-btn-cancel');
-            const okBtn = document.getElementById('confirm-btn-ok');
-
-            const cleanup = () => {
-                modal.classList.add('hidden');
-                cancelBtn.onclick = null;
-                okBtn.onclick = null;
-            };
-
-            cancelBtn.onclick = cleanup;
-            okBtn.onclick = () => {
-                cleanup();
-                if (typeof onConfirm === 'function') onConfirm();
-            };
-
-            modal.classList.remove('hidden');
-        }
-
-        function saveCustomFirebaseConfig() {
-            const val = document.getElementById('firebase-config-input').value.trim();
-            if (!val) {
-                alert('Firebase 설정 JSON 값을 입력해주세요.');
-                return;
-            }
-            try {
-                JSON.parse(val);
-                localStorage.setItem('custom_firebase_config', val);
-                alert('파이어베이스 설정이 저장되었습니다. 페이지가 새로고침됩니다.');
-                window.location.reload();
-            } catch (e) {
-                alert('올바른 JSON 형식이 아닙니다. { "apiKey": ... } 형태인지 확인해주세요.');
-            }
-        }
-
-        function clearCustomFirebaseConfig() {
-            localStorage.removeItem('custom_firebase_config');
-            document.getElementById('firebase-config-input').value = '';
-            alert('파이어베이스 설정이 초기화되었습니다.');
-            window.location.reload();
         }
 
         function getInitialState() {
             const saved = localStorage.getItem('class_budget_data_v1');
             if (saved) {
-                try {
-                    return JSON.parse(saved);
-                } catch (e) {
-                    console.error("Failed to parse stored data", e);
-                }
+                try { return JSON.parse(saved); } catch (e) {}
             }
 
             const initialData = {};
@@ -698,49 +438,11 @@
         }
 
         function resetData() {
-            showConfirmModal(
-                "전체 초기화",
-                "모든 추가 항목을 초기화하고 체육대회 음료 비용(59,400원) 기본 상태로 돌리시겠습니까?",
-                () => {
-                    classData = getInitialState();
-                    window.classData = classData;
-                    saveData();
-                }
-            );
-        }
-
-        function exportBackupJSON() {
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(classData, null, 2));
-            const dlAnchorElem = document.createElement('a');
-            dlAnchorElem.setAttribute("href", dataStr);
-            dlAnchorElem.setAttribute("download", `class_budget_backup_${new Date().toISOString().slice(0,10)}.json`);
-            document.body.appendChild(dlAnchorElem);
-            dlAnchorElem.click();
-            dlAnchorElem.remove();
-        }
-
-        function importBackupJSON(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const imported = JSON.parse(e.target.result);
-                    if (typeof imported === 'object' && imported !== null) {
-                        classData = imported;
-                        window.classData = classData;
-                        saveData();
-                        document.getElementById('backup-modal').classList.add('hidden');
-                        alert('백업 데이터가 성공적으로 복구되었습니다!');
-                    } else {
-                        alert('올바르지 않은 백업 파일 형지입니다.');
-                    }
-                } catch (err) {
-                    alert('파일을 읽는 중 오류가 발생했습니다: ' + err.message);
-                }
-            };
-            reader.readAsText(file);
+            if (confirm("모든 지출 항목을 초기화하고 체육대회 음료 비용(59,400원) 기본 상태로 돌리시겠습니까?")) {
+                classData = getInitialState();
+                window.classData = classData;
+                saveData();
+            }
         }
 
         function getClassTotalSpent(classNum) {
@@ -809,12 +511,11 @@
 
             const grandBudget = DEFAULT_CLASS_BUDGET * TOTAL_CLASSES;
             const grandRemain = grandBudget - grandTotalSpent;
-            const overallPercent = ((grandRemain / grandBudget) * 100).toFixed(1);
 
             document.getElementById('stat-total-budget').textContent = grandBudget.toLocaleString() + '원';
             document.getElementById('stat-total-spent').textContent = grandTotalSpent.toLocaleString() + '원';
             document.getElementById('stat-total-remain').textContent = grandRemain.toLocaleString() + '원';
-            document.getElementById('stat-remain-percent').textContent = overallPercent + '% 남음';
+            document.getElementById('stat-remain-percent').textContent = ((grandRemain / grandBudget) * 100).toFixed(1) + '% 남음';
             document.getElementById('stat-avg-spent').textContent = Math.round(grandTotalSpent / TOTAL_CLASSES).toLocaleString() + '원';
 
             document.getElementById('foot-drinks-total').textContent = grandDrinksTotal.toLocaleString() + '원';
@@ -913,14 +614,10 @@
         }
 
         function deleteExpense(itemId) {
-            showConfirmModal(
-                "지출 항목 삭제",
-                "선택하신 지출 내역 항목을 삭제하시겠습니까?",
-                () => {
-                    classData[currentSelectedClass] = classData[currentSelectedClass].filter(item => item.id !== itemId);
-                    saveData();
-                }
-            );
+            if (confirm("이 지출 내역 항목을 삭제하시겠습니까?")) {
+                classData[currentSelectedClass] = classData[currentSelectedClass].filter(item => item.id !== itemId);
+                saveData();
+            }
         }
 
         function switchTab(tabName) {
@@ -1007,7 +704,6 @@
         }
 
         window.render = render;
-
         window.onload = function() {
             render();
         };
