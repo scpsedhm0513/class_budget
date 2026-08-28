@@ -14,6 +14,33 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+        // 페이지 로드 즉시 로컬 저장소 데이터 안전 복원
+        function loadLocalData() {
+            const saved = localStorage.getItem('class_budget_data_v1');
+            if (saved) {
+                try {
+                    const parsed = JSON.parse(saved);
+                    if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                        return parsed;
+                    }
+                } catch(e){}
+            }
+            const initial = {};
+            for (let i = 1; i <= 10; i++) {
+                initial[i] = [{
+                    id: 'fixed-drink-' + i,
+                    name: '체육대회 음료 비용',
+                    amount: 59400,
+                    note: '전 학급 공통 적용',
+                    isFixed: true
+                }];
+            }
+            return initial;
+        }
+
+        // 전역 변수에 데이터 즉시 선조치 할당
+        window.classData = window.classData || loadLocalData();
+
         // Firebase 설정 (환경 변수 또는 기본 설정)
         const defaultConfig = {
             apiKey: "",
@@ -50,7 +77,7 @@
                     if (!user) return;
                     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
                     
-                    // 실시간 수신 고성능 리스너
+                    // 실시간 수신 리스너 (기존 로컬 데이터 덮어쓰기 방지 처리)
                     onSnapshot(docRef, (docSnap) => {
                         if (docSnap.exists() && docSnap.data()?.classes) {
                             window.classData = docSnap.data().classes;
@@ -58,8 +85,10 @@
                             if (typeof window.render === 'function') window.render();
                             window.updateSyncBadge(true);
                         } else {
-                            // 데이터가 없을 시 초기 데이터 업로드
-                            window.saveToCloud(window.classData);
+                            // 클라우드 데이터가 없을 때는 기존에 복원해둔 로컬 데이터를 클라우드에 업로드
+                            if (window.classData) {
+                                window.saveToCloud(window.classData);
+                            }
                         }
                     }, (err) => {
                         console.warn("Cloud sync listening in local fallback mode:", err);
@@ -75,6 +104,7 @@
         }
 
         window.saveToCloud = async function(data) {
+            if (!data) return;
             localStorage.setItem('class_budget_data_v1', JSON.stringify(data));
             if (!db || !auth?.currentUser) return;
             try {
@@ -393,22 +423,18 @@
         const SPORTS_DRINK_COST = 59400;
         let currentSelectedClass = 1;
 
-        function updateSyncBadge(isLive) {
-            const badge = document.getElementById('sync-badge');
-            if (!badge) return;
-            if (isLive) {
-                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
-                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 자동 공유 중`;
-            } else {
-                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-200 border border-blue-400/30";
-                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-blue-300"></span> 자동 저장 중`;
-            }
-        }
-
         function getInitialState() {
+            if (window.classData && Object.keys(window.classData).length > 0) {
+                return window.classData;
+            }
             const saved = localStorage.getItem('class_budget_data_v1');
             if (saved) {
-                try { return JSON.parse(saved); } catch (e) {}
+                try {
+                    const parsed = JSON.parse(saved);
+                    if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+                        return parsed;
+                    }
+                } catch (e) {}
             }
 
             const initialData = {};
