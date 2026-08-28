@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>10개 반 학급비 예산 관리 시스템</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'class-budget-app';
+        let db = null;
+        let auth = null;
+
+        if (typeof __firebase_config !== 'undefined') {
+            try {
+                const firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                const initAuth = async () => {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                };
+
+                initAuth().then(() => {
+                    onAuthStateChanged(auth, (user) => {
+                        if (!user) return;
+                        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
+                        onSnapshot(docRef, (docSnap) => {
+                            if (docSnap.exists() && docSnap.data()?.classes) {
+                                window.classData = docSnap.data().classes;
+                                localStorage.setItem('class_budget_data_v1', JSON.stringify(window.classData));
+                                window.render();
+                                window.setSyncBadgeStatus(true, docSnap.data()?.updatedAt);
+                            } else {
+                                window.saveToCloud(window.classData);
+                                window.setSyncBadgeStatus(true, new Date().toISOString());
+                            }
+                        }, (err) => {
+                            console.error("Cloud sync error:", err);
+                            window.setSyncBadgeStatus(false);
+                        });
+                    });
+                }).catch(err => {
+                    console.error("Auth failed:", err);
+                    window.setSyncBadgeStatus(false);
+                });
+            } catch (e) {
+                console.error("Firebase init failed:", e);
+                window.setSyncBadgeStatus(false);
+            }
+        }
+
+        window.saveToCloud = async function(data) {
+            // Always save locally first as immediate fallback
+            localStorage.setItem('class_budget_data_v1', JSON.stringify(data));
+            
+            if (!db || !auth?.currentUser) {
+                window.setSyncBadgeStatus(false);
+                return;
+            }
+            try {
+                window.showSavingIndicator(true);
+                const nowIso = new Date().toISOString();
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
+                await setDoc(docRef, { classes: data, updatedAt: nowIso }, { merge: true });
+                window.setSyncBadgeStatus(true, nowIso);
+            } catch (err) {
+                console.error("Failed to sync to cloud:", err);
+                window.setSyncBadgeStatus(false);
+            } finally {
+                window.showSavingIndicator(false);
+            }
+        };
+    </script>
+
+    <style>
+        body {
+            font-family: 'Noto Sans KR', 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        .tab-btn.active {
+            border-bottom: 3px solid #3b82f6;
+            color: #1d4ed8;
+            font-weight: 700;
+        }
+    </style>
+</head>
+<body class="text-slate-800 min-h-screen pb-12">
+
+    <header class="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 text-white shadow-lg sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div class="flex items-center space-x-3">
+                <div class="bg-white/10 p-2.5 rounded-xl backdrop-blur-md">
+                    <i class="fa-solid font-bold fa-calculator text-2xl text-yellow-300"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-xl sm:text-2xl font-bold tracking-tight">10개 반 학급비 예산 통합 관리</h1>
+                        <span id="sync-status-badge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 저장됨
+                        </span>
+                    </div>
+                    <p class="text-xs text-blue-100 mt-0.5" id="sync-time-desc">기본 예산 3,000,000원 (반별 300,000원) | 실시간 공유 및 자동 보관 중</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-2 flex-wrap gap-y-2">
+                <button onclick="forceSyncData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1" title="데이터 수동 저장">
+                    <i class="fa-solid fa-arrows-rotate" id="sync-spin-icon"></i> 지금 저장/동기화
+                </button>
+                <button onclick="showBackupModal()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
+                    <i class="fa-solid fa-box-archive"></i> 데이터 백업/복구
+                </button>
+                <button onclick="showShareGuideModal()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
+                    <i class="fa-solid fa-share-nodes"></i> 선생님 공유 방법
+                </button>
+                <button onclick="exportToExcel()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-medium px-4 py-2 rounded-lg shadow transition flex items-center gap-2 text-sm">
+                    <i class="fa-solid fa-file-excel"></i> 엑셀 파일(.xlsx) 다운로드
+                </button>
+                <button onclick="resetData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition">
+                    <i class="fa-solid fa-rotate-right"></i> 초기화
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+
+        <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <!-- Card 1 -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">총 교부 예산</p>
+                    <p class="text-2xl font-bold text-slate-800 mt-1" id="stat-total-budget">3,000,000원</p>
+                    <span class="text-xs text-slate-500">10개 반 × 300,000원</span>
+                </div>
+                <div class="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center text-xl font-bold">
+                    <i class="fa-solid fa-wallet"></i>
+                </div>
+            </div>
+
+            <!-- Card 2 -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">총 사용 금액</p>
+                    <p class="text-2xl font-bold text-indigo-600 mt-1" id="stat-total-spent">0원</p>
+                    <span class="text-xs text-slate-500" id="stat-spent-sub">체육대회 음료 포함</span>
+                </div>
+                <div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center text-xl font-bold">
+                    <i class="fa-solid fa-receipt"></i>
+                </div>
+            </div>
+
+            <!-- Card 3 -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">잔여 총 예산</p>
+                    <p class="text-2xl font-bold text-emerald-600 mt-1" id="stat-total-remain">3,000,000원</p>
+                    <span class="text-xs text-emerald-600 font-medium" id="stat-remain-percent">100% 남음</span>
+                </div>
+                <div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center text-xl font-bold">
+                    <i class="fa-solid fa-piggy-bank"></i>
+                </div>
+            </div>
+
+            <!-- Card 4 -->
+            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">반별 평균 지출</p>
+                    <p class="text-2xl font-bold text-slate-800 mt-1" id="stat-avg-spent">0원</p>
+                    <span class="text-xs text-slate-500">반당 평균 사용액</span>
+                </div>
+                <div class="w-12 h-12 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center text-xl font-bold">
+                    <i class="fa-solid fa-chart-pie"></i>
+                </div>
+            </div>
+        </section>
+
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm">
+            <div class="border-b border-slate-200 px-4 flex space-x-6 overflow-x-auto" id="view-tabs">
+                <button onclick="switchTab('summary')" id="tab-btn-summary" class="tab-btn active py-3 text-sm font-medium text-slate-600 hover:text-blue-600 whitespace-nowrap">
+                    <i class="fa-solid fa-table-list mr-1"></i> 전체 10개 반 통합 요약표
+                </button>
+                <button onclick="switchTab('detail')" id="tab-btn-detail" class="tab-btn py-3 text-sm font-medium text-slate-600 hover:text-blue-600 whitespace-nowrap">
+                    <i class="fa-solid fa-pen-to-square mr-1"></i> 반별 지출 내역 작성 및 입력
+                </button>
+                <button onclick="switchTab('excel-guide')" id="tab-btn-excel-guide" class="tab-btn py-3 text-sm font-medium text-slate-600 hover:text-blue-600 whitespace-nowrap">
+                    <i class="fa-solid fa-code mr-1"></i> 엑셀 수식 작성 방법 가이드
+                </button>
+            </div>
+
+            <div id="view-summary" class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-slate-800">
+                        <i class="fa-solid fa-list-check text-blue-600 mr-2"></i>반별 예산 및 잔액 현황표
+                    </h2>
+                    <span class="text-xs bg-blue-50 text-blue-700 px-3 py-1 rounded-full font-medium">
+                        * 체육대회 음료 비용(5,9,400원)이 모든 반에 기본 포함되어 있습니다.
+                    </span>
+                </div>
+
+                <div class="overflow-x-auto rounded-lg border border-slate-200">
+                    <table class="w-full text-sm text-left text-slate-600">
+                        <thead class="text-xs text-slate-700 uppercase bg-slate-100 border-b border-slate-200">
+                            <tr>
+                                <th scope="col" class="px-4 py-3 text-center">반 구분</th>
+                                <th scope="col" class="px-4 py-3 text-right">기본 예산</th>
+                                <th scope="col" class="px-4 py-3 text-right text-indigo-700 bg-indigo-50/50">체육대회 음료비</th>
+                                <th scope="col" class="px-4 py-3 text-right">기타 추가 지출</th>
+                                <th scope="col" class="px-4 py-3 text-right font-bold text-slate-900 bg-slate-200/50">반별 사용 총액</th>
+                                <th scope="col" class="px-4 py-3 text-right font-bold text-emerald-700 bg-emerald-50/50">반별 남은 금액</th>
+                                <th scope="col" class="px-4 py-3 text-center">예산 사용률</th>
+                                <th scope="col" class="px-4 py-3 text-center">관리</th>
+                            </tr>
+                        </thead>
+                        <tbody id="summary-table-body" class="divide-y divide-slate-200 bg-white">
+                            <!-- Javascript populates this -->
+                        </tbody>
+                        <tfoot class="bg-slate-800 text-white font-bold text-sm">
+                            <tr>
+                                <td class="px-4 py-3 text-center">합 계 (전체)</td>
+                                <td class="px-4 py-3 text-right">3,000,000원</td>
+                                <td class="px-4 py-3 text-right text-indigo-200" id="foot-drinks-total">594,000원</td>
+                                <td class="px-4 py-3 text-right" id="foot-extra-total">0원</td>
+                                <td class="px-4 py-3 text-right text-yellow-300" id="foot-spent-total">594,000원</td>
+                                <td class="px-4 py-3 text-right text-emerald-300" id="foot-remain-total">2,406,000원</td>
+                                <td class="px-4 py-3 text-center" id="foot-usage-rate">19.8%</td>
+                                <td class="px-4 py-3 text-center">-</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+
+            <div id="view-detail" class="p-6 hidden">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                    <div>
+                        <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                            <span id="current-class-title" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm">1반</span>
+                            <span>지출 내역 상세 관리</span>
+                        </h2>
+                        <p class="text-xs text-slate-500 mt-1">항목을 추가하면 상단 요약표 및 남은 금액이 자동으로 계산됩니다.</p>
+                    </div>
+
+                    <!-- Class Select Buttons -->
+                    <div class="flex flex-wrap gap-1" id="class-select-buttons">
+                        <!-- JS populated buttons for 1반 - 10반 -->
+                    </div>
+                </div>
+
+                <!-- Active Class Info Banner -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div class="text-center sm:text-left">
+                        <span class="text-xs text-slate-500">배정 예산</span>
+                        <p class="text-lg font-bold text-slate-800">300,000원</p>
+                    </div>
+                    <div class="text-center sm:text-left">
+                        <span class="text-xs text-slate-500">현재 사용 총액</span>
+                        <p class="text-lg font-bold text-indigo-600" id="detail-class-spent">59,400원</p>
+                    </div>
+                    <div class="text-center sm:text-left">
+                        <span class="text-xs text-slate-500">남은 금액</span>
+                        <p class="text-lg font-bold text-emerald-600" id="detail-class-remain">240,600원</p>
+                    </div>
+                </div>
+
+                <!-- Add New Expense Form -->
+                <form id="add-expense-form" onsubmit="handleAddExpense(event)" class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                    <div class="sm:col-span-3">
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">사용 내역 / 항목명</label>
+                        <input type="text" id="input-item-name" required placeholder="예: 학급 회식, 학용품 구매" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div class="sm:col-span-3">
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">사용 금액 (원)</label>
+                        <input type="number" id="input-item-amount" required min="0" step="10" placeholder="예: 15000" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div class="sm:col-span-4">
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">비고 (선택)</label>
+                        <input type="text" id="input-item-note" placeholder="영수증 첨부 완료, 담당 학생 등" class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg text-sm transition flex items-center justify-center gap-1">
+                            <i class="fa-solid fa-plus"></i> 항목 추가
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Expenses Table for Selected Class -->
+                <div class="overflow-x-auto rounded-lg border border-slate-200">
+                    <table class="w-full text-sm text-left text-slate-600">
+                        <thead class="text-xs text-slate-700 uppercase bg-slate-100 border-b border-slate-200">
+                            <tr>
+                                <th scope="col" class="px-4 py-3 text-center w-12">NO</th>
+                                <th scope="col" class="px-4 py-3">지출 항목명</th>
+                                <th scope="col" class="px-4 py-3 text-right">금액</th>
+                                <th scope="col" class="px-4 py-3">비고</th>
+                                <th scope="col" class="px-4 py-3 text-center w-24">삭제</th>
+                            </tr>
+                        </thead>
+                        <tbody id="detail-table-body" class="divide-y divide-slate-200 bg-white">
+                            <!-- JS populated -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="view-excel-guide" class="p-6 hidden space-y-6">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-800 mb-2">
+                        <i class="fa-solid fa-file-code text-indigo-600 mr-2"></i>엑셀(Excel) 직접 작성 시 수식 입력 안내
+                    </h2>
+                    <p class="text-sm text-slate-600">
+                        마이크로소프트 엑셀이나 구글 스프레드시트에서 직접 작성할 때 바로 사용할 수 있는 셀 구조와 수식입니다.
+                    </p>
+                </div>
+
+                <!-- Excel Preview Mockup -->
+                <div class="bg-slate-900 text-slate-100 p-5 rounded-xl font-mono text-xs overflow-x-auto leading-relaxed border border-slate-800">
+                    <p class="text-slate-400 mb-3">// 엑셀 시트 배치 예시 (A열 ~ F열 기준)</p>
+                    <table class="w-full text-left border-collapse min-w-[600px]">
+                        <thead>
+                            <tr class="border-b border-slate-700 text-slate-400">
+                                <th class="py-1 px-2">셀</th>
+                                <th class="py-1 px-2">A (반)</th>
+                                <th class="py-1 px-2">B (기본 예산)</th>
+                                <th class="py-1 px-2">C (체육대회 음료)</th>
+                                <th class="py-1 px-2">D (기타 지출)</th>
+                                <th class="py-1 px-2">E (반별 사용 총액)</th>
+                                <th class="py-1 px-2 text-emerald-400">F (반별 남은 금액)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-1 px-2 text-amber-400">행 3</td>
+                                <td class="py-1 px-2">1반</td>
+                                <td class="py-1 px-2">300000</td>
+                                <td class="py-1 px-2">59400</td>
+                                <td class="py-1 px-2">0</td>
+                                <td class="py-1 px-2 text-indigo-300">=SUM(C3:D3)</td>
+                                <td class="py-1 px-2 text-emerald-300">=B3-E3</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-1 px-2 text-amber-400">행 4</td>
+                                <td class="py-1 px-2">2반</td>
+                                <td class="py-1 px-2">300000</td>
+                                <td class="py-1 px-2">59400</td>
+                                <td class="py-1 px-2">0</td>
+                                <td class="py-1 px-2 text-indigo-300">=SUM(C4:D4)</td>
+                                <td class="py-1 px-2 text-emerald-300">=B4-E4</td>
+                            </tr>
+                            <tr>
+                                <td class="py-1 px-2 text-slate-500">...</td>
+                                <td class="py-1 px-2 text-slate-500">...</td>
+                                <td class="py-1 px-2 text-slate-500">...</td>
+                                <td class="py-1 px-2 text-slate-500">...</td>
+                                <td class="py-1 px-2 text-slate-500">...</td>
+                                <td class="py-1 px-2 text-slate-500">...</td>
+                                <td class="py-1 px-2 text-slate-500">...</td>
+                            </tr>
+                            <tr class="border-b border-slate-800">
+                                <td class="py-1 px-2 text-amber-400">행 12</td>
+                                <td class="py-1 px-2">10반</td>
+                                <td class="py-1 px-2">300000</td>
+                                <td class="py-1 px-2">59400</td>
+                                <td class="py-1 px-2">0</td>
+                                <td class="py-1 px-2 text-indigo-300">=SUM(C12:D12)</td>
+                                <td class="py-1 px-2 text-emerald-300">=B12-E12</td>
+                            </tr>
+                            <tr class="bg-slate-800/80 font-bold">
+                                <td class="py-1.5 px-2 text-yellow-400">행 13</td>
+                                <td class="py-1.5 px-2 text-yellow-300">합계</td>
+                                <td class="py-1.5 px-2 text-yellow-300">=SUM(B3:B12)</td>
+                                <td class="py-1.5 px-2 text-yellow-300">=SUM(C3:C12)</td>
+                                <td class="py-1.5 px-2 text-yellow-300">=SUM(D3:D12)</td>
+                                <td class="py-1.5 px-2 text-indigo-300">=SUM(E3:E12)</td>
+                                <td class="py-1.5 px-2 text-emerald-300">=SUM(F3:F12) 또는 =SUM(B3:B12)-E13</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Explanation Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-blue-50 border border-blue-200 p-4 rounded-xl">
+                        <h3 class="font-bold text-blue-900 text-sm mb-2"><i class="fa-solid fa-key text-blue-600 mr-1"></i> 핵심 수식 설명</h3>
+                        <ul class="text-xs text-blue-800 space-y-2 list-disc list-inside">
+                            <li><strong class="text-blue-950">반별 사용 총액 수식:</strong> <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=SUM(C3:D3)</code> (음료비 + 추가지출)</li>
+                            <li><strong class="text-blue-950">반별 남은 금액 수식:</strong> <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=B3-E3</code> (반별 예산 30만원 - 반별 사용총액)</li>
+                            <li><strong class="text-blue-950">전체 남은 총 예산 수식:</strong> <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=SUM(F3:F12)</code> 또는 <code class="bg-white px-1.5 py-0.5 rounded border border-blue-300 font-mono">=3000000-SUM(E3:E12)</code></li>
+                        </ul>
+                    </div>
+
+                    <div class="bg-amber-50 border border-amber-200 p-4 rounded-xl">
+                        <h3 class="font-bold text-amber-900 text-sm mb-2"><i class="fa-solid fa-lightbulb text-amber-600 mr-1"></i> 팁 & 자동 다운로드 기능</h3>
+                        <p class="text-xs text-amber-800 leading-relaxed">
+                            우측 상단의 <span class="font-bold text-emerald-700">[엑셀 파일(.xlsx) 다운로드]</span> 버튼을 누르면, 모든 내역과 계산 수식이 미리 적용된 실제 마이크로소프트 엑셀 시트 파일이 컴퓨터에 자동 생성되어 즉시 다운로드됩니다!
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Custom Modal UI for Confirmations -->
+    <div id="confirm-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4 border border-slate-100">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center font-bold text-lg flex-shrink-0">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <div>
+                    <h3 class="font-bold text-slate-800" id="confirm-modal-title">확인</h3>
+                    <p class="text-xs text-slate-500 mt-0.5" id="confirm-modal-desc">정말 진행하시겠습니까?</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 pt-2">
+                <button onclick="closeConfirmModal(false)" class="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition">취소</button>
+                <button id="confirm-modal-action-btn" class="px-4 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition">확인</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Teacher Share Info Modal -->
+    <div id="share-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-100">
+            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                <h3 class="font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fa-solid fa-users text-blue-600"></i> 선생님들과 공유하는 방법
+                </h3>
+                <button onclick="document.getElementById('share-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-sm">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="space-y-3 text-xs text-slate-600 leading-relaxed">
+                <div class="bg-blue-50 p-3 rounded-xl border border-blue-100 text-blue-900">
+                    <p class="font-bold mb-1"><i class="fa-solid fa-cloud-arrow-up mr-1"></i> 실시간 클라우드 자동 동기화 적용 완료</p>
+                    <p>현재 페이지 주소(URL)를 복사하여 선생님들께 보내주시면, 모든 담임 선생님이 동시에 접속하여 사용할 수 있습니다.</p>
+                </div>
+                <ul class="space-y-2 list-disc list-inside bg-slate-50 p-3 rounded-xl">
+                    <li><strong>실시간 입력:</strong> 어떤 선생님이 항목을 추가하면 다른 선생님들 화면에 즉시 업데이트됩니다.</li>
+                    <li><strong>남은 금액 실시간 계산:</strong> 반별 30만원 기준 남은 금액이 자동으로 계산되어 유지됩니다.</li>
+                    <li><strong>최종 다운로드:</strong> 수시로 [엑셀 다운로드] 버튼을 눌러 정식 보관용 파일(.xlsx)로 추출 가능합니다.</li>
+                </ul>
+            </div>
+            <div class="pt-2 flex justify-end">
+                <button onclick="document.getElementById('share-modal').classList.add('hidden')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-xl text-xs transition">
+                    확인했습니다
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Backup / Restore Modal -->
+    <div id="backup-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-100">
+            <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                <h3 class="font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fa-solid fa-box-archive text-indigo-600"></i> 데이터 백업 및 복구
+                </h3>
+                <button onclick="document.getElementById('backup-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-600 text-sm">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div class="space-y-4 text-xs text-slate-600 leading-relaxed">
+                <div class="bg-indigo-50 p-3.5 rounded-xl border border-indigo-100">
+                    <h4 class="font-bold text-indigo-900 mb-1 flex items-center gap-1">
+                        <i class="fa-solid fa-download"></i> 내 컴퓨터로 백업 파일 저장
+                    </h4>
+                    <p class="text-indigo-800 text-[11px] mb-2">현재까지 입력된 모든 반별 지출 데이터를 안전한 파일(.json)로 내보냅니다.</p>
+                    <button onclick="exportBackupJSON()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-file-arrow-down"></i> 백업 파일 다운로드
+                    </button>
+                </div>
+
+                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                    <h4 class="font-bold text-slate-800 mb-1 flex items-center gap-1">
+                        <i class="fa-solid fa-upload"></i> 백업 파일 불러오기 (복구)
+                    </h4>
+                    <p class="text-slate-500 text-[11px] mb-2">이전에 저장해둔 백업 파일(.json)을 올리면 데이터가 이전 상태로 복구됩니다.</p>
+                    <input type="file" id="import-file-input" accept=".json" onchange="importBackupJSON(event)" class="hidden">
+                    <button onclick="document.getElementById('import-file-input').click()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center gap-1.5">
+                        <i class="fa-solid fa-folder-open"></i> 백업 파일 선택하여 복구
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Default Budget Settings
+        const DEFAULT_CLASS_BUDGET = 300000;
+        const SPORTS_DRINK_COST = 59400;
+        const TOTAL_CLASSES = 10;
+
+        let currentSelectedClass = 1;
+
+        function setSyncBadgeStatus(isSynced, updatedAt) {
+            const badge = document.getElementById('sync-status-badge');
+            const desc = document.getElementById('sync-time-desc');
+            const timeText = updatedAt ? new Date(updatedAt).toLocaleTimeString('ko-KR') : new Date().toLocaleTimeString('ko-KR');
+
+            if (badge) {
+                if (isSynced) {
+                    badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
+                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 저장됨`;
+                    if (desc) desc.textContent = `기본 예산 3,000,000원 (반별 300,000원) | 클라우드 동기화 완료 (${timeText})`;
+                } else {
+                    badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
+                    badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> 로컬 저장됨`;
+                    if (desc) desc.textContent = `기본 예산 3,000,000원 (반별 300,000원) | 브라우저 내 안전 저장 (${timeText})`;
+                }
+            }
+        }
+
+        function showSavingIndicator(isSaving) {
+            const spin = document.getElementById('sync-spin-icon');
+            if (spin) {
+                if (isSaving) spin.classList.add('fa-spin');
+                else spin.classList.remove('fa-spin');
+            }
+        }
+
+        function forceSyncData() {
+            saveData();
+            showSavingIndicator(true);
+            setTimeout(() => showSavingIndicator(false), 800);
+        }
+
+        function showBackupModal() {
+            document.getElementById('backup-modal').classList.remove('hidden');
+        }
+
+        function exportBackupJSON() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(classData, null, 2));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", `학급비_예산_백업_${new Date().toISOString().slice(0,10)}.json`);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
+
+        function importBackupJSON(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const imported = JSON.parse(e.target.result);
+                    if (imported && typeof imported === 'object') {
+                        classData = imported;
+                        saveData();
+                        alert('데이터 복구가 완료되었습니다!');
+                        document.getElementById('backup-modal').classList.add('hidden');
+                    } else {
+                        alert('유효하지 않은 백업 파일 형식입니다.');
+                    }
+                } catch (err) {
+                    alert('파일을 읽는 중 오류가 발생했습니다.');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // Modal Helpers
+        let modalConfirmCallback = null;
+        function showConfirmModal(title, desc, onConfirm) {
+            document.getElementById('confirm-modal-title').textContent = title;
+            document.getElementById('confirm-modal-desc').textContent = desc;
+            modalConfirmCallback = onConfirm;
+            document.getElementById('confirm-modal').classList.remove('hidden');
+        }
+
+        function closeConfirmModal(confirmed) {
+            document.getElementById('confirm-modal').classList.add('hidden');
+            if (confirmed && typeof modalConfirmCallback === 'function') {
+                modalConfirmCallback();
+            }
+            modalConfirmCallback = null;
+        }
+
+        document.getElementById('confirm-modal-action-btn').onclick = () => closeConfirmModal(true);
+
+        function showShareGuideModal() {
+            document.getElementById('share-modal').classList.remove('hidden');
+        }
+
+        // Load or create initial class data
+        function getInitialState() {
+            const saved = localStorage.getItem('class_budget_data_v1');
+            if (saved) {
+                try {
+                    return JSON.parse(saved);
+                } catch (e) {
+                    console.error("Failed to parse stored data", e);
+                }
+            }
+
+            const initialData = {};
+            for (let i = 1; i <= TOTAL_CLASSES; i++) {
+                initialData[i] = [
+                    {
+                        id: 'fixed-drink-' + i,
+                        name: '체육대회 음료 비용',
+                        amount: SPORTS_DRINK_COST,
+                        note: '전 학급 공통 적용',
+                        isFixed: true
+                    }
+                ];
+            }
+            return initialData;
+        }
+
+        let classData = getInitialState();
+
+        function saveData() {
+            localStorage.setItem('class_budget_data_v1', JSON.stringify(classData));
+            if (typeof window.saveToCloud === 'function') {
+                window.saveToCloud(classData);
+            }
+            render();
+        }
+
+        // Reset Data
+        function resetData() {
+            showConfirmModal(
+                "전체 초기화",
+                "모든 추가 항목을 초기화하고 체육대회 음료 비용(59,400원) 기본 상태로 돌리시겠습니까?",
+                () => {
+                    classData = getInitialState();
+                    saveData();
+                }
+            );
+        }
+
+        // Calculations
+        function getClassTotalSpent(classNum) {
+            return (classData[classNum] || []).reduce((sum, item) => sum + Number(item.amount), 0);
+        }
+
+        function getClassDrinksSpent(classNum) {
+            return (classData[classNum] || [])
+                .filter(item => item.isFixed || item.name.includes('체육대회'))
+                .reduce((sum, item) => sum + Number(item.amount), 0);
+        }
+
+        function getClassExtraSpent(classNum) {
+            return (classData[classNum] || [])
+                .filter(item => !item.isFixed && !item.name.includes('체육대회'))
+                .reduce((sum, item) => sum + Number(item.amount), 0);
+        }
+
+        function renderSummary() {
+            const tbody = document.getElementById('summary-table-body');
+            tbody.innerHTML = '';
+
+            let grandTotalSpent = 0;
+            let grandDrinksTotal = 0;
+            let grandExtraTotal = 0;
+
+            for (let i = 1; i <= TOTAL_CLASSES; i++) {
+                const totalSpent = getClassTotalSpent(i);
+                const drinksSpent = getClassDrinksSpent(i);
+                const extraSpent = getClassExtraSpent(i);
+                const remain = DEFAULT_CLASS_BUDGET - totalSpent;
+                const usagePercent = Math.min(Math.round((totalSpent / DEFAULT_CLASS_BUDGET) * 100), 100);
+
+                grandTotalSpent += totalSpent;
+                grandDrinksTotal += drinksSpent;
+                grandExtraTotal += extraSpent;
+
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition border-b border-slate-100";
+                tr.innerHTML = `
+                    <td class="px-4 py-3 text-center font-semibold text-slate-800">${i}반</td>
+                    <td class="px-4 py-3 text-right">${DEFAULT_CLASS_BUDGET.toLocaleString()}원</td>
+                    <td class="px-4 py-3 text-right text-indigo-600 bg-indigo-50/30">${drinksSpent.toLocaleString()}원</td>
+                    <td class="px-4 py-3 text-right">${extraSpent.toLocaleString()}원</td>
+                    <td class="px-4 py-3 text-right font-bold text-slate-900 bg-slate-100/50">${totalSpent.toLocaleString()}원</td>
+                    <td class="px-4 py-3 text-right font-bold ${remain < 0 ? 'text-red-600' : 'text-emerald-600'} bg-emerald-50/30">
+                        ${remain.toLocaleString()}원
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <div class="flex items-center justify-center gap-2">
+                            <div class="w-16 bg-slate-200 rounded-full h-2 overflow-hidden">
+                                <div class="${remain < 0 ? 'bg-red-500' : 'bg-blue-600'} h-2 rounded-full" style="width: ${Math.min(usagePercent, 100)}%"></div>
+                            </div>
+                            <span class="text-xs font-medium text-slate-500 w-8 text-right">${usagePercent}%</span>
+                        </div>
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <button onclick="selectAndGoDetail(${i})" class="text-xs bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 px-2.5 py-1 rounded border border-slate-300 transition">
+                            내역 편집
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            }
+
+            // Update Header/Footer Summary
+            const grandBudget = DEFAULT_CLASS_BUDGET * TOTAL_CLASSES;
+            const grandRemain = grandBudget - grandTotalSpent;
+            const overallPercent = ((grandRemain / grandBudget) * 100).toFixed(1);
+
+            document.getElementById('stat-total-budget').textContent = grandBudget.toLocaleString() + '원';
+            document.getElementById('stat-total-spent').textContent = grandTotalSpent.toLocaleString() + '원';
+            document.getElementById('stat-total-remain').textContent = grandRemain.toLocaleString() + '원';
+            document.getElementById('stat-remain-percent').textContent = overallPercent + '% 남음';
+            document.getElementById('stat-avg-spent').textContent = Math.round(grandTotalSpent / TOTAL_CLASSES).toLocaleString() + '원';
+
+            document.getElementById('foot-drinks-total').textContent = grandDrinksTotal.toLocaleString() + '원';
+            document.getElementById('foot-extra-total').textContent = grandExtraTotal.toLocaleString() + '원';
+            document.getElementById('foot-spent-total').textContent = grandTotalSpent.toLocaleString() + '원';
+            document.getElementById('foot-remain-total').textContent = grandRemain.toLocaleString() + '원';
+            document.getElementById('foot-usage-rate').textContent = ((grandTotalSpent / grandBudget) * 100).toFixed(1) + '%';
+        }
+
+        function renderClassDetail() {
+            document.getElementById('current-class-title').textContent = `${currentSelectedClass}반`;
+
+            // Class Selection Buttons
+            const btnContainer = document.getElementById('class-select-buttons');
+            btnContainer.innerHTML = '';
+            for (let i = 1; i <= TOTAL_CLASSES; i++) {
+                const btn = document.createElement('button');
+                btn.className = `px-3 py-1.5 text-xs rounded-lg font-medium transition ${
+                    i === currentSelectedClass 
+                    ? 'bg-blue-600 text-white shadow-sm' 
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`;
+                btn.textContent = `${i}반`;
+                btn.onclick = () => {
+                    currentSelectedClass = i;
+                    renderClassDetail();
+                };
+                btnContainer.appendChild(btn);
+            }
+
+            // Stats for selected class
+            const totalSpent = getClassTotalSpent(currentSelectedClass);
+            const remain = DEFAULT_CLASS_BUDGET - totalSpent;
+
+            document.getElementById('detail-class-spent').textContent = totalSpent.toLocaleString() + '원';
+            document.getElementById('detail-class-remain').textContent = remain.toLocaleString() + '원';
+            document.getElementById('detail-class-remain').className = `text-lg font-bold ${remain < 0 ? 'text-red-600' : 'text-emerald-600'}`;
+
+            // Expense Items Table
+            const tbody = document.getElementById('detail-table-body');
+            tbody.innerHTML = '';
+
+            const items = classData[currentSelectedClass] || [];
+            if (items.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center py-6 text-slate-400">등록된 지출 내역이 없습니다.</td></tr>`;
+                return;
+            }
+
+            items.forEach((item, index) => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition border-b border-slate-100";
+                tr.innerHTML = `
+                    <td class="px-4 py-3 text-center text-slate-400 text-xs">${index + 1}</td>
+                    <td class="px-4 py-3 font-medium text-slate-800">
+                        ${item.name}
+                        ${item.isFixed ? '<span class="ml-2 text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">기본 항목</span>' : ''}
+                    </td>
+                    <td class="px-4 py-3 text-right font-semibold text-slate-900">${Number(item.amount).toLocaleString()}원</td>
+                    <td class="px-4 py-3 text-xs text-slate-500">${item.note || '-'}</td>
+                    <td class="px-4 py-3 text-center">
+                        ${
+                            item.isFixed 
+                            ? '<span class="text-xs text-slate-300">고정</span>' 
+                            : `<button onclick="deleteExpense('${item.id}')" class="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 p-1.5 rounded transition"><i class="fa-solid fa-trash"></i></button>`
+                        }
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Add Expense Handler
+        function handleAddExpense(e) {
+            e.preventDefault();
+            const nameInput = document.getElementById('input-item-name');
+            const amountInput = document.getElementById('input-item-amount');
+            const noteInput = document.getElementById('input-item-note');
+
+            const newExpense = {
+                id: 'exp-' + Date.now(),
+                name: nameInput.value.trim(),
+                amount: Number(amountInput.value),
+                note: noteInput.value.trim(),
+                isFixed: false
+            };
+
+            if (!classData[currentSelectedClass]) {
+                classData[currentSelectedClass] = [];
+            }
+
+            classData[currentSelectedClass].push(newExpense);
+
+            // Reset Form Inputs
+            nameInput.value = '';
+            amountInput.value = '';
+            noteInput.value = '';
+
+            saveData();
+        }
+
+        // Delete Expense Handler
+        function deleteExpense(itemId) {
+            showConfirmModal(
+                "지출 항목 삭제",
+                "선택하신 지출 내역 항목을 삭제하시겠습니까?",
+                () => {
+                    classData[currentSelectedClass] = classData[currentSelectedClass].filter(item => item.id !== itemId);
+                    saveData();
+                }
+            );
+        }
+
+        // Navigation Switcher
+        function switchTab(tabName) {
+            document.querySelectorAll('#view-tabs .tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('view-summary').classList.add('hidden');
+            document.getElementById('view-detail').classList.add('hidden');
+            document.getElementById('view-excel-guide').classList.add('hidden');
+
+            document.getElementById(`tab-btn-${tabName}`).classList.add('active');
+            document.getElementById(`view-${tabName}`).classList.remove('hidden');
+
+            if (tabName === 'detail') {
+                renderClassDetail();
+            } else if (tabName === 'summary') {
+                renderSummary();
+            }
+        }
+
+        function selectAndGoDetail(classNum) {
+            currentSelectedClass = classNum;
+            switchTab('detail');
+        }
+
+        function exportToExcel() {
+            // Build Excel Data Rows
+            const worksheetData = [
+                ["10개 반 학급비 예산 사용 및 잔액 집계표"],
+                ["생성일시: " + new Date().toLocaleDateString('ko-KR')],
+                [],
+                ["반 구분", "기본 예산", "체육대회 음료비", "기타 지출", "반별 사용 총액", "반별 남은 금액", "비고"]
+            ];
+
+            // Add rows 1반 to 10반
+            for (let i = 1; i <= TOTAL_CLASSES; i++) {
+                const drinksSpent = getClassDrinksSpent(i);
+                const extraSpent = getClassExtraSpent(i);
+                const rowNum = i + 4; // Excel row number offset
+
+                worksheetData.push([
+                    `${i}반`,
+                    DEFAULT_CLASS_BUDGET,
+                    drinksSpent,
+                    extraSpent,
+                    { t: 'n', f: `SUM(C${rowNum}:D${rowNum})` }, // Formula for total spent
+                    { t: 'n', f: `B${rowNum}-E${rowNum}` },     // Formula for remaining
+                    i === 1 ? "체육대회 음료수 59,400원 자동 반영됨" : ""
+                ]);
+            }
+
+            // Add Summary Footer Row
+            const lastClassRow = TOTAL_CLASSES + 4;
+            const summaryRow = lastClassRow + 1;
+            worksheetData.push([
+                "합계",
+                { t: 'n', f: `SUM(B5:B${lastClassRow})` },
+                { t: 'n', f: `SUM(C5:C${lastClassRow})` },
+                { t: 'n', f: `SUM(D5:D${lastClassRow})` },
+                { t: 'n', f: `SUM(E5:E${lastClassRow})` },
+                { t: 'n', f: `SUM(F5:F${lastClassRow})` },
+                "전체 자동 수식 적용 완료"
+            ]);
+
+            // Create Workbook
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+
+            // Set Column Widths
+            ws['!cols'] = [
+                { wch: 10 }, // 반 구분
+                { wch: 15 }, // 기본 예산
+                { wch: 18 }, // 체육대회 음료비
+                { wch: 15 }, // 기타 지출
+                { wch: 18 }, // 반별 사용 총액
+                { wch: 18 }, // 반별 남은 금액
+                { wch: 35 }  // 비고
+            ];
+
+            XLSX.utils.book_append_sheet(wb, ws, "학급비 예산 현황");
+
+            // Also create detailed sheet for each class item
+            const detailRows = [["반명", "항목명", "지출 금액", "비고"]];
+            for (let i = 1; i <= TOTAL_CLASSES; i++) {
+                (classData[i] || []).forEach(item => {
+                    detailRows.push([`${i}반`, item.name, item.amount, item.note || '']);
+                });
+            }
+            const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+            wsDetail['!cols'] = [{ wch: 10 }, { wch: 25 }, { wch: 15 }, { wch: 30 }];
+            XLSX.utils.book_append_sheet(wb, wsDetail, "반별 세부 지출 내역");
+
+            // Trigger Download
+            XLSX.writeFile(wb, "학급비_예산관리_10개반_통합.xlsx");
+        }
+
+        // Main Render Controller
+        function render() {
+            renderSummary();
+            renderClassDetail();
+        }
+
+        // Initial Load
+        window.onload = function() {
+            render();
+        };
+    </script>
+</body>
+</html>
