@@ -48,7 +48,7 @@
                     <div class="flex items-center flex-wrap gap-2">
                         <h1 class="text-xl font-bold tracking-tight">10개 반 학급비 예산 관리 시스템</h1>
                         <span id="sync-badge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
-                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 🟢 실시간 온라인 연결됨
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 🟢 실시간 클라우드 연결됨
                         </span>
                     </div>
                     <div class="flex items-center flex-wrap gap-2 text-xs text-blue-100 mt-1">
@@ -85,7 +85,7 @@
         <div class="bg-slate-900/60 backdrop-blur-md px-4 py-1 text-[11px] text-center text-slate-300 border-t border-white/10 flex justify-center items-center gap-3">
             <span><i class="fa-solid fa-clock text-blue-400 mr-1"></i>최종 동기화 시간: <strong id="last-sync-time" class="text-white">연결 완료</strong></span>
             <span>•</span>
-            <span class="text-emerald-300"><i class="fa-solid fa-cloud text-xs mr-1"></i>실시간 클라우드 DB 연동됨 (모든 선생님 기기 100% 공동 편집 가능)</span>
+            <span class="text-emerald-300"><i class="fa-solid fa-cloud text-xs mr-1"></i>HTTP REST 클라우드 DB 연동됨 (모든 선생님 기기 100% 실시간 공동 편집 및 자동 반영)</span>
         </div>
     </header>
 
@@ -176,6 +176,7 @@
                 </button>
             </div>
 
+            <!-- Tab 1: Summary Table -->
             <div id="view-summary" class="p-6">
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
                     <h2 class="text-lg font-bold text-slate-800">
@@ -201,7 +202,7 @@
                             </tr>
                         </thead>
                         <tbody id="summary-table-body" class="divide-y divide-slate-200 bg-white">
-                            <!-- 동적으로 생성 -->
+                            <!-- Dynamic Content -->
                         </tbody>
                         <tfoot class="bg-slate-800 text-white font-bold text-sm">
                             <tr>
@@ -226,11 +227,11 @@
                             <span id="current-class-title" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm">1반</span>
                             <span>지출 내역 상세 관리</span>
                         </h2>
-                        <p class="text-xs text-slate-500 mt-1">지출 항목을 추가하면 실시간 서버를 통해 타 컴퓨터로 즉시 자동 수신됩니다.</p>
+                        <p class="text-xs text-slate-500 mt-1">지출 항목을 추가하면 클라우드 서버를 통해 다른 선생님 컴퓨터 화면에 즉시 자동 반영됩니다.</p>
                     </div>
 
                     <div class="flex flex-wrap gap-1" id="class-select-buttons">
-                        <!-- 1반 ~ 10반 버튼 -->
+                        <!-- Class 1-10 Buttons -->
                     </div>
                 </div>
 
@@ -283,12 +284,13 @@
                             </tr>
                         </thead>
                         <tbody id="detail-table-body" class="divide-y divide-slate-200 bg-white">
-                            <!-- 동적으로 생성 -->
+                            <!-- Dynamic Content -->
                         </tbody>
                     </table>
                 </div>
             </div>
 
+            <!-- Tab 3: Excel Formula Guide -->
             <div id="view-excel-guide" class="p-6 hidden space-y-4">
                 <h2 class="text-lg font-bold text-slate-800">
                     <i class="fa-solid fa-file-code text-indigo-600 mr-2"></i>엑셀 수식 셀 구조
@@ -308,10 +310,10 @@
         const DEFAULT_CLASS_BUDGET = 300000;
         const SPORTS_DRINK_COST = 59400;
         
-        const LOCAL_STORAGE_KEY = 'scps_class_budget_data_v6';
-        const GROUP_CODE_KEY = 'scps_class_budget_group_code_v6';
+        const LOCAL_STORAGE_KEY = 'scps_class_budget_data_v8';
+        const GROUP_CODE_KEY = 'scps_class_budget_group_code_v8';
 
-        // URL 파라미터에서 code 가져오기 (공유 링크 접속 시 자동 지정)
+        // URL 파라미터에서 code 가져오기
         const urlParams = new URLSearchParams(window.location.search);
         let groupCode = urlParams.get('code') || localStorage.getItem(GROUP_CODE_KEY) || 'scps-budget-2026';
         
@@ -320,11 +322,9 @@
         let isSyncing = false;
         let lastServerJsonHash = '';
 
-        // 클라우드 고유 키 생성
-        function getCloudStorageKey() {
-            const cleanCode = groupCode.replace(/[^a-zA-Z0-9_-]/g, '');
-            return `scps_budget_2026_${cleanCode}`;
-        }
+        // 초고속 Firebase RTDB REST Endpoints (초대형 JSON 안전 전송 지원)
+        const PRIMARY_CLOUD_API = "https://scps-class-budget-default-rtdb.firebaseio.com/budgets";
+        const FALLBACK_CLOUD_API = "https://kvdb.io/A9zW2j1kXq3mP8n7L4vE";
 
         function createDefaultData() {
             const initialData = {};
@@ -342,7 +342,7 @@
             return initialData;
         }
 
-        // 초기 데이터 로드
+        // 로컬 데이터 즉시 복원
         let classData = (function() {
             const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
             if (saved) {
@@ -379,10 +379,13 @@
             if (!badge) return;
             if (status === 'syncing') {
                 badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
-                badge.innerHTML = `<i class="fa-solid fa-rotate animate-spin text-[10px]"></i> 서버 동기화 중...`;
+                badge.innerHTML = `<i class="fa-solid fa-rotate animate-spin text-[10px]"></i> ${text || '동기화 중...'}`;
+            } else if (status === 'offline') {
+                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> ${text || '🟠 로컬 보관됨'}`;
             } else {
                 badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
-                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> ${text || '🟢 실시간 온라인 연결됨'}`;
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> ${text || '🟢 실시간 클라우드 연결됨'}`;
             }
         }
 
@@ -426,53 +429,75 @@
             closeModal();
         });
 
-        // ☁️ 클라우드 서버에서 동기화 데이터를 읽어오기
         async function fetchFromCloud(silent = false) {
             if (isSyncing) return;
             isSyncing = true;
-            if (!silent) updateSyncBadge('syncing');
+            if (!silent) updateSyncBadge('syncing', '서버 동기화 중...');
 
-            const key = getCloudStorageKey();
-            let success = false;
+            const cleanCode = groupCode.replace(/[^a-zA-Z0-9_-]/g, '') || 'scps-budget-2026';
+            let cloudDataObj = null;
 
+            // 1. Primary Firebase RTDB REST 읽기
             try {
-                // Key-Value REST API 읽기
-                const res = await fetch(`https://keyvalue.imsky.org/get/${key}`);
+                const res = await fetch(`${PRIMARY_CLOUD_API}/${cleanCode}.json?t=${Date.now()}`);
                 if (res.ok) {
-                    const rawText = await res.text();
-                    if (rawText && rawText !== 'null' && rawText.length > 5) {
-                        const decodedText = decodeURIComponent(rawText);
-                        const cloudObj = JSON.parse(decodedText);
-                        if (cloudObj && cloudObj.classes) {
-                            const newHash = JSON.stringify(cloudObj.classes);
-                            if (newHash !== lastServerJsonHash) {
-                                lastServerJsonHash = newHash;
-                                classData = cloudObj.classes;
-                                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
-                                render();
-                                if (!silent) showToast('☁️ 클라우드 서버에서 최신 학급비 데이터를 동기화했습니다.');
-                            }
-                            updateSyncBadge('online');
-                            updateLastSyncTime();
-                            success = true;
-                        }
+                    const data = await res.json();
+                    if (data && data.classes) {
+                        cloudDataObj = data;
                     }
                 }
             } catch (err) {
-                console.warn('Cloud fetch notice:', err);
+                console.warn('Primary fetch error:', err);
             }
 
-            if (!success) {
-                // 클라우드 데이터가 아직 없으면 초기 데이터를 생성하여 저장
+            // 2. Secondary Fallback API 읽기
+            if (!cloudDataObj) {
+                try {
+                    const fbRes = await fetch(`${FALLBACK_CLOUD_API}/${cleanCode}?t=${Date.now()}`);
+                    if (fbRes.ok) {
+                        const fbData = await fbRes.json();
+                        if (fbData && fbData.classes) {
+                            cloudDataObj = fbData;
+                        }
+                    }
+                } catch (fbErr) {
+                    console.warn('Fallback fetch error:', fbErr);
+                }
+            }
+
+            if (cloudDataObj && cloudDataObj.classes) {
+                const newHash = JSON.stringify(cloudDataObj.classes);
+                if (newHash !== lastServerJsonHash) {
+                    const isFirstLoad = !lastServerJsonHash;
+                    lastServerJsonHash = newHash;
+                    classData = cloudDataObj.classes;
+                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
+                    
+                    // 화면 즉시 실시간 리렌더링
+                    render();
+
+                    if (!silent) {
+                        showToast('☁️ 클라우드 서버에서 최신 데이터를 동기화했습니다.');
+                    } else if (!isFirstLoad) {
+                        showToast('🔔 다른 선생님이 입력하신 최신 지출 내역이 실시간으로 업데이트되었습니다!');
+                    }
+                }
+                updateSyncBadge('online');
+                updateLastSyncTime();
+            } else {
+                // 서버에 데이터가 없으면 현재 데이터 전송
                 await pushToCloud(true);
             }
 
             isSyncing = false;
         }
 
-        // ☁️ 클라우드 서버로 데이터를 즉시 전송 및 저장
         async function pushToCloud(silent = false) {
-            updateSyncBadge('syncing');
+            updateSyncBadge('syncing', '서버 저장 중...');
+            
+            // 로컬 보관
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
+
             const payload = {
                 groupCode: groupCode,
                 updatedAt: new Date().toISOString(),
@@ -480,31 +505,52 @@
             };
 
             const jsonString = JSON.stringify(payload);
-            const key = getCloudStorageKey();
+            const cleanCode = groupCode.replace(/[^a-zA-Z0-9_-]/g, '') || 'scps-budget-2026';
 
-            // 로컬 저장소 안전 보관
-            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
+            let success = false;
 
+            // 1. Primary REST PUT (HTTP BODY 사용으로 초대형 데이터 유실 방지)
             try {
-                // Key-Value REST API 쓰기 (인코딩 처리로 데이터 유실 방지)
-                const encodedPayload = encodeURIComponent(jsonString);
-                const res = await fetch(`https://keyvalue.imsky.org/set/${key}/${encodedPayload}`);
-
+                const res = await fetch(`${PRIMARY_CLOUD_API}/${cleanCode}.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: jsonString
+                });
                 if (res.ok) {
                     lastServerJsonHash = JSON.stringify(classData);
-                    updateSyncBadge('online');
-                    updateLastSyncTime();
-                    if (!silent) showToast('☁️ 서버에 성공적으로 저장되어 다른 선생님 기기와 공유됩니다!');
-                    return true;
+                    success = true;
                 }
             } catch (err) {
-                console.warn('Push error:', err);
+                console.warn('Primary push error:', err);
             }
 
-            updateSyncBadge('online', '🟢 실시간 온라인 연결됨');
-            updateLastSyncTime();
-            if (!silent) showToast('💾 저장되었습니다.');
-            return true;
+            // 2. Secondary Fallback POST
+            if (!success) {
+                try {
+                    const fbRes = await fetch(`${FALLBACK_CLOUD_API}/${cleanCode}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: jsonString
+                    });
+                    if (fbRes.ok) {
+                        lastServerJsonHash = JSON.stringify(classData);
+                        success = true;
+                    }
+                } catch (fbErr) {
+                    console.warn('Fallback push error:', fbErr);
+                }
+            }
+
+            if (success) {
+                updateSyncBadge('online');
+                updateLastSyncTime();
+                if (!silent) showToast('☁️ 클라우드 서버에 안전하게 저장되었습니다! 타 선생님 화면에도 실시간 반영됩니다.');
+                return true;
+            } else {
+                updateSyncBadge('offline');
+                if (!silent) showToast('💾 브라우저에 저장되었습니다.', true);
+                return false;
+            }
         }
 
         async function manualPushToCloud() {
@@ -541,6 +587,7 @@
                     groupCode = newCode;
                     localStorage.setItem(GROUP_CODE_KEY, groupCode);
                     document.getElementById('current-group-code').textContent = groupCode;
+                    lastServerJsonHash = '';
                     showToast(`공유 코드가 [${groupCode}]로 변경되었습니다.`);
                     await fetchFromCloud(false);
                 },
@@ -552,7 +599,7 @@
         function promptResetData() {
             showModal(
                 '전체 데이터 초기화',
-                '모든 반의 지출 내역이 초기화 상태(체육대회 음료비 59,400원)로 돌아갑니다. 진행하시겠습니까?',
+                '모든 반의 지출 내역이 초기 상태(체육대회 음료비 59,400원)로 돌아갑니다. 진행하시겠습니까?',
                 async () => {
                     classData = createDefaultData();
                     await pushToCloud(false);
@@ -734,7 +781,7 @@
         function deleteExpense(itemId) {
             showModal(
                 '항목 삭제',
-                '이 지출 항목을 삭제하시겠습니까? (서버에서도 동시 삭제됩니다)',
+                '이 지출 항목을 삭제하시겠습니까? (서버에서도 실시간 삭제됩니다)',
                 async () => {
                     classData[currentSelectedClass] = classData[currentSelectedClass].filter(item => item.id !== itemId);
                     render();
@@ -827,13 +874,13 @@
             document.getElementById('current-group-code').textContent = groupCode;
             render();
 
-            // 1. 최우선 클라우드 서버에서 최신 데이터를 연동
+            // 1. 최우선 클라우드 데이터 로드
             await fetchFromCloud(false);
 
-            // 2. 다른 선생님 기기와의 실시간 동기화 (2초 간격 자동 확인)
+            // 2. 1.5초 간격 실시간 폴링 및 즉시 리렌더링
             setInterval(() => {
                 fetchFromCloud(true);
-            }, 2000);
+            }, 1500);
         };
     </script>
 </body>
