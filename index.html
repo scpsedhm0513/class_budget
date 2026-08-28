@@ -1,22 +1,10 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>10개 반 학급비 예산 관리 시스템</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
-    
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const STORAGE_KEY = 'class_budget_data_v2';
 
         // 페이지 로드 즉시 로컬 저장소 데이터 안전 복원
         function loadLocalData() {
-            const saved = localStorage.getItem('class_budget_data_v1');
+            const saved = localStorage.getItem(STORAGE_KEY);
             if (saved) {
                 try {
                     const parsed = JSON.parse(saved);
@@ -38,10 +26,9 @@
             return initial;
         }
 
-        // 전역 변수에 데이터 즉시 선조치 할당
         window.classData = window.classData || loadLocalData();
 
-        // Firebase 설정 (환경 변수 또는 기본 설정)
+        // Firebase 설정
         const defaultConfig = {
             apiKey: "",
             authDomain: "class-budget-app.firebaseapp.com",
@@ -73,47 +60,52 @@
             };
 
             initAuth().then(() => {
-                onAuthStateChanged(auth, (user) => {
+                onAuthStateChanged(auth, async (user) => {
                     if (!user) return;
                     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
                     
-                    // 실시간 수신 리스너 (기존 로컬 데이터 덮어쓰기 방지 처리)
-                    onSnapshot(docRef, (docSnap) => {
-                        if (docSnap.exists() && docSnap.data()?.classes) {
-                            window.classData = docSnap.data().classes;
-                            localStorage.setItem('class_budget_data_v1', JSON.stringify(window.classData));
-                            if (typeof window.render === 'function') window.render();
-                            window.updateSyncBadge(true);
+                    // 초기 접속 시 클라우드 데이터 확인 후 안전 병합
+                    try {
+                        const snap = await getDoc(docRef);
+                        if (snap.exists() && snap.data()?.classes) {
+                            const cloudClasses = snap.data().classes;
+                            // 로컬에 이미 데이터가 있으면 로컬 우선 보존
+                            if (!localStorage.getItem(STORAGE_KEY)) {
+                                window.classData = cloudClasses;
+                                localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudClasses));
+                                if (typeof window.render === 'function') window.render();
+                            }
                         } else {
-                            // 클라우드 데이터가 없을 때는 기존에 복원해둔 로컬 데이터를 클라우드에 업로드
                             if (window.classData) {
                                 window.saveToCloud(window.classData);
                             }
                         }
-                    }, (err) => {
-                        console.warn("Cloud sync listening in local fallback mode:", err);
-                        window.updateSyncBadge(false);
-                    });
+                    } catch(e) {
+                        console.warn("Cloud read skipped:", e);
+                    }
+                    if (typeof window.updateSyncBadge === 'function') window.updateSyncBadge(true);
                 });
             }).catch(() => {
-                window.updateSyncBadge(false);
+                if (typeof window.updateSyncBadge === 'function') window.updateSyncBadge(false);
             });
         } catch(e) {
-            console.warn("Firebase initialization skipped, running in local mode:", e);
-            setTimeout(() => window.updateSyncBadge(false), 300);
+            console.warn("Firebase initialization skipped:", e);
+            if (typeof window.updateSyncBadge === 'function') window.updateSyncBadge(false);
         }
 
         window.saveToCloud = async function(data) {
-            if (!data) return;
-            localStorage.setItem('class_budget_data_v1', JSON.stringify(data));
-            if (!db || !auth?.currentUser) return;
+            if (!data) return false;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            if (!db || !auth?.currentUser) return false;
             try {
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
                 await setDoc(docRef, { classes: data, updatedAt: new Date().toISOString() }, { merge: true });
-                window.updateSyncBadge(true);
+                if (typeof window.updateSyncBadge === 'function') window.updateSyncBadge(true);
+                return true;
             } catch (err) {
                 console.warn("Save to cloud failed, saved locally:", err);
-                window.updateSyncBadge(false);
+                if (typeof window.updateSyncBadge === 'function') window.updateSyncBadge(false);
+                return false;
             }
         };
     </script>
@@ -143,16 +135,19 @@
                     <div class="flex items-center gap-2">
                         <h1 class="text-xl sm:text-2xl font-bold tracking-tight">10개 반 학급비 예산 관리 시스템</h1>
                         <span id="sync-badge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
-                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 실시간 자동 공유 중
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 자동 보관 지원 중
                         </span>
                     </div>
-                    <p class="text-xs text-blue-100 mt-0.5">총 예산 3,000,000원 (반별 300,000원) | 입력 시 실시간 자동 보관</p>
+                    <p class="text-xs text-blue-100 mt-0.5">총 예산 3,000,000원 (반별 300,000원)</p>
                 </div>
             </div>
             
-            <div class="flex items-center space-x-2">
-                <button onclick="exportToExcel()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-medium px-4 py-2 rounded-lg shadow transition flex items-center gap-2 text-sm">
-                    <i class="fa-solid fa-file-excel"></i> 엑셀 파일(.xlsx) 다운로드
+            <div class="flex flex-wrap items-center gap-2">
+                <button onclick="manualSaveAndSync()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-4 py-2 rounded-lg shadow-lg transition flex items-center gap-2 text-sm ring-2 ring-emerald-300/50">
+                    <i class="fa-solid fa-cloud-arrow-up text-base"></i> ☁️ 수동 동기화 및 저장
+                </button>
+                <button onclick="exportToExcel()" class="bg-white/10 hover:bg-white/20 text-white font-medium px-3 py-2 rounded-lg shadow transition flex items-center gap-1.5 text-sm">
+                    <i class="fa-solid fa-file-excel"></i> 엑셀 다운로드
                 </button>
                 <button onclick="resetData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
                     <i class="fa-solid fa-rotate-right"></i> 초기화
@@ -160,6 +155,12 @@
             </div>
         </div>
     </header>
+
+    <!-- Toast Notification Banner -->
+    <div id="toast-message" class="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 transition-all duration-300 opacity-0 pointer-events-none transform translate-y-4">
+        <i class="fa-solid fa-circle-check text-emerald-400 text-lg"></i>
+        <span id="toast-text" class="text-sm font-medium">저장되었습니다.</span>
+    </div>
 
     <!-- Main Content -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
@@ -421,13 +422,38 @@
         const TOTAL_CLASSES = 10;
         const DEFAULT_CLASS_BUDGET = 300000;
         const SPORTS_DRINK_COST = 59400;
+        const STORAGE_KEY = 'class_budget_data_v2';
         let currentSelectedClass = 1;
+
+        function updateSyncBadge(isOnline) {
+            const badge = document.getElementById('sync-badge');
+            if (!badge) return;
+            if (isOnline) {
+                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30";
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 동기화 연결됨`;
+            } else {
+                badge.className = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-200 border border-amber-400/30";
+                badge.innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> 브라우저 저장 모드`;
+            }
+        }
+        window.updateSyncBadge = updateSyncBadge;
+
+        function showToast(msg, isError = false) {
+            const toast = document.getElementById('toast-message');
+            const toastText = document.getElementById('toast-text');
+            if (!toast || !toastText) return;
+            toastText.textContent = msg;
+            toast.className = `fixed bottom-5 right-5 z-50 ${isError ? 'bg-red-900 text-red-100' : 'bg-slate-900 text-white'} px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 transition-all duration-300 opacity-100 transform translate-y-0`;
+            setTimeout(() => {
+                toast.className = 'fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 transition-all duration-300 opacity-0 pointer-events-none transform translate-y-4';
+            }, 3000);
+        }
 
         function getInitialState() {
             if (window.classData && Object.keys(window.classData).length > 0) {
                 return window.classData;
             }
-            const saved = localStorage.getItem('class_budget_data_v1');
+            const saved = localStorage.getItem(STORAGE_KEY);
             if (saved) {
                 try {
                     const parsed = JSON.parse(saved);
@@ -456,18 +482,35 @@
         window.classData = classData;
 
         function saveData() {
-            localStorage.setItem('class_budget_data_v1', JSON.stringify(classData));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(classData));
             if (typeof window.saveToCloud === 'function') {
                 window.saveToCloud(classData);
             }
             render();
         }
 
+        async function manualSaveAndSync() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(classData));
+            if (typeof window.saveToCloud === 'function') {
+                const cloudSuccess = await window.saveToCloud(classData);
+                if (cloudSuccess) {
+                    showToast('☁️ 브라우저 및 클라우드 동기화 완료!');
+                } else {
+                    showToast('💾 브라우저에 안전하게 저장되었습니다!');
+                }
+            } else {
+                showToast('💾 브라우저 내에 성공적으로 저장되었습니다!');
+            }
+            render();
+        }
+
         function resetData() {
-            if (confirm("모든 지출 항목을 초기화하고 체육대회 음료 비용(59,400원) 기본 상태로 돌리시겠습니까?")) {
+            if (confirm("모든 지출 항목을 초기화하고 기본 상태(체육대회 음료비 59,400원)로 돌리시겠습니까?")) {
+                localStorage.removeItem(STORAGE_KEY);
                 classData = getInitialState();
                 window.classData = classData;
                 saveData();
+                showToast('초기화되었습니다.');
             }
         }
 
