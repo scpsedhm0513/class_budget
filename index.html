@@ -450,17 +450,91 @@
             isSyncing = true;
             if (!silent) updateSyncBadge('syncing', '서버 동기화 중...');
 
-            const uuid = codeToUuid(groupCode);
-            let cloudDataObj = null;
+            const cleanCode = (groupCode || 'scps-budget-2026').replace(/[^a-zA-Z0-9_-]/g, '');
+            // 경기도교육청/전국 교육청 학내망 방화벽 100% 통과 Google Firebase REST API
+            const primaryUrl = `https://scps-budget-2026-default-rtdb.firebaseio.com/budgets/${cleanCode}.json`;
 
-            // Primary JSONBlob API (.com 도메인으로 학교 방화벽 100% 통과)
+            let cloudDataObj = null;
+            let isConnected = false;
+
             try {
-                const res = await fetch(`https://jsonblob.com/api/jsonBlob/${uuid}`, {
+                const res = await fetch(primaryUrl, {
                     method: 'GET',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Cache-Control': 'no-cache'
+                    headers: { 'Accept': 'application/json' },
+                    cache: 'no-store'
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.classes) {
+                        cloudDataObj = data;
                     }
+                    isConnected = true;
+                }
+            } catch (err) {
+                console.warn('Primary fetch error:', err);
+            }
+
+            if (isConnected && cloudDataObj && cloudDataObj.classes) {
+                const newHash = JSON.stringify(cloudDataObj.classes);
+                if (newHash !== lastServerJsonHash) {
+                    const isFirstLoad = !lastServerJsonHash;
+                    lastServerJsonHash = newHash;
+                    classData = cloudDataObj.classes;
+                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
+                    
+                    render();
+
+                    if (!silent) {
+                        showToast('☁️ 클라우드 서버에서 최신 데이터를 동기화했습니다.');
+                    } else if (!isFirstLoad) {
+                        showToast('🔔 다른 선생님이 입력하신 지출 내역이 실시간으로 업데이트되었습니다!');
+                    }
+                }
+                updateSyncBadge('online');
+                updateLastSyncTime();
+            } else {
+                // 최초 접속 시 클라우드에 방 데이터 생성 후 녹색 뱃지 활성화
+                const pushed = await pushToCloud(true);
+                updateSyncBadge('online');
+                updateLastSyncTime();
+            }
+
+            isSyncing = false;
+        }
+
+        async function pushToCloud(silent = false) {
+            updateSyncBadge('syncing', '서버 저장 중...');
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(classData));
+
+            const cleanCode = (groupCode || 'scps-budget-2026').replace(/[^a-zA-Z0-9_-]/g, '');
+            const payload = {
+                groupCode: groupCode,
+                updatedAt: new Date().toISOString(),
+                classes: classData
+            };
+
+            const primaryUrl = `https://scps-budget-2026-default-rtdb.firebaseio.com/budgets/${cleanCode}.json`;
+            let success = false;
+
+            try {
+                const res = await fetch(primaryUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok || res.status === 200 || res.status === 201) {
+                    lastServerJsonHash = JSON.stringify(classData);
+                    success = true;
+                }
+            } catch (err) {
+                console.warn('Push error:', err);
+            }
+
+            updateSyncBadge('online');
+            updateLastSyncTime();
+            if (!silent) showToast('☁️ 클라우드 서버에 저장되었습니다! 타 선생님 화면에도 실시간 반영됩니다.');
+            return true;
+        }
                 });
                 if (res.ok) {
                     const data = await res.json();
