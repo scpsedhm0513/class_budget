@@ -1,8 +1,26 @@
-import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>10개 반 학급비 예산 관리 시스템</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- SheetJS (XLSX) CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- Google Fonts: Noto Sans KR -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const STORAGE_KEY = 'class_budget_data_v2';
 
-        // 페이지 로드 즉시 로컬 저장소 데이터 안전 복원
+        // 로컬 데이터 안전 초기 로드 함수
         function loadLocalData() {
             const saved = localStorage.getItem(STORAGE_KEY);
             if (saved) {
@@ -28,7 +46,7 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
 
         window.classData = window.classData || loadLocalData();
 
-        // Firebase 설정
+        // Firebase 클라우드 초기화
         const defaultConfig = {
             apiKey: "",
             authDomain: "class-budget-app.firebaseapp.com",
@@ -64,12 +82,10 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                     if (!user) return;
                     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'class_budgets', 'shared_data');
                     
-                    // 초기 접속 시 클라우드 데이터 확인 후 안전 병합
                     try {
                         const snap = await getDoc(docRef);
                         if (snap.exists() && snap.data()?.classes) {
                             const cloudClasses = snap.data().classes;
-                            // 로컬에 이미 데이터가 있으면 로컬 우선 보존
                             if (!localStorage.getItem(STORAGE_KEY)) {
                                 window.classData = cloudClasses;
                                 localStorage.setItem(STORAGE_KEY, JSON.stringify(cloudClasses));
@@ -124,7 +140,6 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
 </head>
 <body class="text-slate-800 min-h-screen pb-12">
 
-    <!-- Header -->
     <header class="bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-800 text-white shadow-md sticky top-0 z-40">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
             <div class="flex items-center space-x-3">
@@ -135,7 +150,7 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                     <div class="flex items-center gap-2">
                         <h1 class="text-xl sm:text-2xl font-bold tracking-tight">10개 반 학급비 예산 관리 시스템</h1>
                         <span id="sync-badge" class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
-                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 자동 보관 지원 중
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 동기화 준비됨
                         </span>
                     </div>
                     <p class="text-xs text-blue-100 mt-0.5">총 예산 3,000,000원 (반별 300,000원)</p>
@@ -149,20 +164,35 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                 <button onclick="exportToExcel()" class="bg-white/10 hover:bg-white/20 text-white font-medium px-3 py-2 rounded-lg shadow transition flex items-center gap-1.5 text-sm">
                     <i class="fa-solid fa-file-excel"></i> 엑셀 다운로드
                 </button>
-                <button onclick="resetData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
+                <button onclick="promptResetData()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-2 rounded-lg transition flex items-center gap-1">
                     <i class="fa-solid fa-rotate-right"></i> 초기화
                 </button>
             </div>
         </div>
     </header>
 
-    <!-- Toast Notification Banner -->
     <div id="toast-message" class="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 transition-all duration-300 opacity-0 pointer-events-none transform translate-y-4">
         <i class="fa-solid fa-circle-check text-emerald-400 text-lg"></i>
         <span id="toast-text" class="text-sm font-medium">저장되었습니다.</span>
     </div>
 
-    <!-- Main Content -->
+    <!-- Confirmation Modal Dialog -->
+    <div id="custom-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl border border-slate-100 transform transition-all">
+            <div class="text-center">
+                <div class="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-4 text-xl">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <h3 id="modal-title" class="text-lg font-bold text-slate-800 mb-2">확인</h3>
+                <p id="modal-desc" class="text-sm text-slate-600 mb-6">정말 이 작업을 진행하시겠습니까?</p>
+                <div class="flex gap-3 justify-center">
+                    <button onclick="closeModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-xl text-sm transition">취소</button>
+                    <button id="modal-confirm-btn" class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-xl text-sm transition">확인</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
 
         <!-- Stat Cards -->
@@ -212,7 +242,6 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
             </div>
         </section>
 
-        <!-- Navigation Tabs -->
         <div class="bg-white rounded-xl border border-slate-200 shadow-sm">
             <div class="border-b border-slate-200 px-4 flex space-x-6 overflow-x-auto" id="view-tabs">
                 <button onclick="switchTab('summary')" id="tab-btn-summary" class="tab-btn active py-3 text-sm font-medium text-slate-600 hover:text-blue-600 whitespace-nowrap">
@@ -226,7 +255,6 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                 </button>
             </div>
 
-            <!-- Tab 1: Summary Table -->
             <div id="view-summary" class="p-6">
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="text-lg font-bold text-slate-800">
@@ -252,7 +280,7 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                             </tr>
                         </thead>
                         <tbody id="summary-table-body" class="divide-y divide-slate-200 bg-white">
-                            <!-- Dynamically generated -->
+                            <!-- 동적 생성을 수행합니다 -->
                         </tbody>
                         <tfoot class="bg-slate-800 text-white font-bold text-sm">
                             <tr>
@@ -270,7 +298,6 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                 </div>
             </div>
 
-            <!-- Tab 2: Class Detail Input -->
             <div id="view-detail" class="p-6 hidden">
                 <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                     <div>
@@ -278,11 +305,11 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                             <span id="current-class-title" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm">1반</span>
                             <span>지출 내역 상세 관리</span>
                         </h2>
-                        <p class="text-xs text-slate-500 mt-1">지출 항목을 작성하시면 실시간으로 잔액이 자동 계산되고 보관됩니다.</p>
+                        <p class="text-xs text-slate-500 mt-1">지출 항목을 작성하시면 실시간으로 잔액이 자동 계산되고 저장됩니다.</p>
                     </div>
 
                     <div class="flex flex-wrap gap-1" id="class-select-buttons">
-                        <!-- Buttons for 1반 ~ 10반 -->
+                        <!-- 1반 ~ 10반 버튼 구역 -->
                     </div>
                 </div>
 
@@ -335,13 +362,12 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                             </tr>
                         </thead>
                         <tbody id="detail-table-body" class="divide-y divide-slate-200 bg-white">
-                            <!-- Dynamically generated -->
+                            <!-- 동적 생성을 수행합니다 -->
                         </tbody>
                     </table>
                 </div>
             </div>
 
-            <!-- Tab 3: Excel Formula Guide -->
             <div id="view-excel-guide" class="p-6 hidden space-y-6">
                 <div>
                     <h2 class="text-lg font-bold text-slate-800 mb-2">
@@ -424,6 +450,7 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
         const SPORTS_DRINK_COST = 59400;
         const STORAGE_KEY = 'class_budget_data_v2';
         let currentSelectedClass = 1;
+        let pendingAction = null;
 
         function updateSyncBadge(isOnline) {
             const badge = document.getElementById('sync-badge');
@@ -448,6 +475,25 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
                 toast.className = 'fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 transition-all duration-300 opacity-0 pointer-events-none transform translate-y-4';
             }, 3000);
         }
+
+        function showModal(title, desc, onConfirm) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-desc').textContent = desc;
+            pendingAction = onConfirm;
+            document.getElementById('custom-modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('custom-modal').classList.add('hidden');
+            pendingAction = null;
+        }
+
+        document.getElementById('modal-confirm-btn').addEventListener('click', () => {
+            if (typeof pendingAction === 'function') {
+                pendingAction();
+            }
+            closeModal();
+        });
 
         function getInitialState() {
             if (window.classData && Object.keys(window.classData).length > 0) {
@@ -504,14 +550,18 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
             render();
         }
 
-        function resetData() {
-            if (confirm("모든 지출 항목을 초기화하고 기본 상태(체육대회 음료비 59,400원)로 돌리시겠습니까?")) {
-                localStorage.removeItem(STORAGE_KEY);
-                classData = getInitialState();
-                window.classData = classData;
-                saveData();
-                showToast('초기화되었습니다.');
-            }
+        function promptResetData() {
+            showModal(
+                '전체 데이터 초기화',
+                '모든 작성 내역이 삭제되고 기본 상태(음료비 59,400원)로 돌아갑니다. 진행하시겠습니까?',
+                () => {
+                    localStorage.removeItem(STORAGE_KEY);
+                    classData = getInitialState();
+                    window.classData = classData;
+                    saveData();
+                    showToast('초기화되었습니다.');
+                }
+            );
         }
 
         function getClassTotalSpent(classNum) {
@@ -680,13 +730,19 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
             noteInput.value = '';
 
             saveData();
+            showToast('새 항목이 추가 및 저장되었습니다.');
         }
 
         function deleteExpense(itemId) {
-            if (confirm("이 지출 내역 항목을 삭제하시겠습니까?")) {
-                classData[currentSelectedClass] = classData[currentSelectedClass].filter(item => item.id !== itemId);
-                saveData();
-            }
+            showModal(
+                '항목 삭제',
+                '이 지출 내역 항목을 삭제하시겠습니까?',
+                () => {
+                    classData[currentSelectedClass] = classData[currentSelectedClass].filter(item => item.id !== itemId);
+                    saveData();
+                    showToast('항목이 삭제되었습니다.');
+                }
+            );
         }
 
         function switchTab(tabName) {
@@ -765,6 +821,7 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstat
             XLSX.utils.book_append_sheet(wb, wsDetail, "반별 세부 지출 내역");
 
             XLSX.writeFile(wb, "학급비_예산관리_10개반_통합.xlsx");
+            showToast('📊 엑셀 파일이 다운로드되었습니다.');
         }
 
         function render() {
